@@ -1,0 +1,31 @@
+services:
+  db:
+    image: postgres:18-alpine
+    container_name: chaps_db
+    environment:
+      POSTGRES_USER: chaps_admin
+      POSTGRES_PASSWORD: password123
+      POSTGRES_DB: chaps_ledger
+    command: >
+      -c io_method=worker
+      -c io_workers=4
+      -c track_io_timing=on
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./internal/db:/docker-entrypoint-initdb.d:ro
+      - postgres_data:/var/lib/postgresql/data
+
+  app:
+    build: .
+    container_name: chaps_server
+    platform: linux/amd64
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: "postgres://chaps_admin:password123@db:5432/chaps_ledger"
+    depends_on:
+      - db
+
+volumes:
+  postgres_data:

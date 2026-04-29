@@ -1,0 +1,7 @@
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.14">
+    <FIToFICstmrCdtTrf>
+        <GrpHdr>
+            <MsgId>CHAPS-001</MsgId>
+            </GrpHdr>
+    </FIToFICstmrCdtTrf>
+</Document>
