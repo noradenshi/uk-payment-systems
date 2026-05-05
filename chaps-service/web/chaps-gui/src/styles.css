@@ -1,0 +1,234 @@
+:root {
+  font-family: "Segoe UI", sans-serif;
+  color: #1f2937;
+  background: #f4f6f8;
+  line-height: 1.5;
+  font-weight: 400;
+  --panel: #ffffff;
+  --border: #dde3ea;
+  --muted: #6b7280;
+  --accent: #0f766e;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+button {
+  font: inherit;
+}
+
+.shell {
+  width: min(1100px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 32px 0 48px;
+}
+
+.hero,
+.panel,
+.metric-ready,
+.metric-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
+}
+
+.hero,
+.panel {
+  padding: 22px;
+  margin-bottom: 20px;
+}
+
+.hero {
+  display: grid;
+  grid-template-columns: 1.7fr 1fr;
+  gap: 20px;
+  align-items: center;
+}
+
+.eyebrow,
+.section-label {
+  margin: 0 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.75rem;
+  color: var(--accent);
+}
+
+.hero h1,
+.panel h2 {
+  margin: 0;
+}
+
+.lead,
+.service-item p,
+.queue-item p,
+.demo-box span,
+.metric-ready span,
+th {
+  color: var(--muted);
+}
+
+.hero-box {
+  display: grid;
+  gap: 14px;
+}
+
+.primary-button {
+  border: 0;
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: #0f766e;
+  color: #ffffff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.demo-box {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 16px;
+}
+
+.demo-box strong {
+  display: block;
+  margin-top: 8px;
+}
+
+.metrics-grid,
+.content-grid {
+  display: grid;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+
+.metrics-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.content-grid {
+  grid-template-columns: 1.5fr 1fr;
+}
+
+.metric-card {
+  min-height: 96px;
+}
+
+.metric-ready {
+  padding: 18px;
+}
+
+.metric-ready strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 1.9rem;
+}
+
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.service-list,
+.queue-list {
+  display: grid;
+  gap: 12px;
+}
+
+.service-item,
+.queue-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 14px 16px;
+}
+
+.queue-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 12px 10px;
+  text-align: left;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+th {
+  font-weight: 600;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 88px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.pill-online,
+.pill-settled {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.pill-degraded,
+.pill-queued,
+.pill-pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.pill-offline,
+.pill-rejected {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+@media (max-width: 920px) {
+  .hero,
+  .metrics-grid,
+  .content-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .shell {
+    width: min(100% - 20px, 1100px);
+    padding-top: 20px;
+  }
+
+  .service-item,
+  .queue-item {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .queue-meta {
+    width: 100%;
+    justify-content: space-between;
+  }
+}
