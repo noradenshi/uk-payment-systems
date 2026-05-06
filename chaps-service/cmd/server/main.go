@@ -37,6 +37,7 @@ func main() {
 	}
 
 	// 4. Set up routes and start
+	http.HandleFunc("/api/dashboard", srv.Dashboard)
 	http.HandleFunc("/pay", srv.ProcessPayment)
 	log.Println("Engine starting...")
 	log.Fatal(http.ListenAndServe(":8080", nil))

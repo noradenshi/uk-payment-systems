@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getDashboardData, samplePaymentXml, sendDemoPayment } from "./api";
+import { createDemoPaymentXml, getDashboardData, sendDemoPayment } from "./api";
 import type { DashboardData, QueueItem, ServiceItem } from "./types";
 
 const emptyState: DashboardData = {
@@ -13,7 +13,7 @@ const statusLabels: Record<string, string> = {
   SETTLED: "Rozliczona",
   QUEUED: "W kolejce",
   REJECTED: "Odrzucona",
-  PENDING: "Oczekująca",
+  PENDING: "Oczekujaca",
   online: "Online",
   degraded: "Ograniczona",
   offline: "Offline",
@@ -27,7 +27,7 @@ function QueueStatus({ status }: { status: QueueItem["status"] | ServiceItem["st
 export default function App() {
   const [data, setData] = useState<DashboardData>(emptyState);
   const [loading, setLoading] = useState(true);
-  const [demoResult, setDemoResult] = useState("Jeszcze nie wysłano");
+  const [demoResult, setDemoResult] = useState("Jeszcze nie wyslano");
 
   useEffect(() => {
     getDashboardData()
@@ -36,24 +36,25 @@ export default function App() {
   }, []);
 
   async function handleSendDemo() {
-    setDemoResult("Wysyłanie...");
-    const result = await sendDemoPayment(samplePaymentXml);
+    setDemoResult("Wysylanie...");
+    const result = await sendDemoPayment(createDemoPaymentXml());
     setDemoResult(result);
+    getDashboardData().then(setData);
   }
 
   return (
     <main className="shell">
       <section className="hero">
         <div>
-          <p className="eyebrow">Moduł CHAPS</p>
+          <p className="eyebrow">Modul CHAPS</p>
           <h1>Panel operatora CHAPS</h1>
           <p className="lead">
-            Prosty panel do podglądu uczestników, kolejki rozliczeń i stanu serwisu CHAPS.
+            Prosty panel do podgladu uczestnikow, kolejki rozliczen i stanu serwisu CHAPS.
           </p>
         </div>
         <div className="hero-box">
           <button className="primary-button" onClick={handleSendDemo}>
-            Wyślij płatność demo
+            Wyslij platnosc demo
           </button>
           <div className="demo-box">
             <span>Wynik z bramy</span>
@@ -104,7 +105,7 @@ export default function App() {
         <article className="panel">
           <div className="panel-head">
             <div>
-              <p className="section-label">Usługi</p>
+              <p className="section-label">Uslugi</p>
               <h2>Stan systemu</h2>
             </div>
           </div>
@@ -126,7 +127,7 @@ export default function App() {
         <div className="panel-head">
           <div>
             <p className="section-label">Kolejka</p>
-            <h2>Ostatnie płatności CHAPS</h2>
+            <h2>Ostatnie platnosci CHAPS</h2>
           </div>
         </div>
         <div className="queue-list">
@@ -135,7 +136,7 @@ export default function App() {
               <div>
                 <strong>{item.msgId}</strong>
                 <p>
-                  {item.sender} do {item.receiver} · {item.amount}
+                  {item.sender} do {item.receiver} - {item.amount}
                 </p>
               </div>
               <div className="queue-meta">
