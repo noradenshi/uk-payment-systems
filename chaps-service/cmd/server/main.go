@@ -1,4 +1,3 @@
-// cmd/server/main.go
 package main
 
 import (
@@ -14,6 +13,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+func registerXSD(reg *validator.ValidatorRegistry, file string) {
+	if err := reg.Register(file, "xsd/" + file + ".xsd"); err != nil {
+		log.Fatalf("Fatal: %v", err)
+	}
+}
+
 func main() {
 	ctx := context.Background()
 
@@ -22,13 +27,10 @@ func main() {
 
 	// 2. Initialize Validator Registry
 	reg := validator.NewValidatorRegistry()
-
-	if err := reg.Register("pacs.008.001.14", "xsd/pacs.008.001.14.xsd"); err != nil {
-		log.Fatalf("Fatal: %v", err)
-	}
-	if err := reg.Register("pacs.002.001.16", "xsd/pacs.002.001.16.xsd"); err != nil {
-		log.Fatalf("Fatal: %v", err)
-	}
+	registerXSD(reg, "pacs.008.001.14")
+	registerXSD(reg, "pacs.002.001.16")
+	registerXSD(reg, "head.001.001.02")
+	registerXSD(reg, "head.001.001.04")
 
 	// 3. Initialize Server
 	srv := &server.Server{
@@ -37,7 +39,6 @@ func main() {
 	}
 
 	// 4. Set up routes and start
-	http.HandleFunc("/pay", srv.ProcessPayment)
-	log.Println("Engine starting...")
+	http.HandleFunc("/v1/payments/chaps", srv.ProcessPayment)
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
