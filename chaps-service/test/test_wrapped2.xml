@@ -1,0 +1,25 @@
+<BizMsg>
+    <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.02">
+        <Fr><FIId><FinInstnId><BICFI>BANKUK22</BICFI></FinInstnId></FIId></Fr>
+        <To><FIId><FinInstnId><BICFI>CHAPSGB2L</BICFI></FinInstnId></FIId></To>
+        <BizMsgIdr>MSG-999-001</BizMsgIdr>
+        <MsgDefIdr>pacs.008.001.14</MsgDefIdr>
+        <CreDt>2026-05-06T09:00:00Z</CreDt>
+    </AppHdr>
+    <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.14">
+        <FIToFICstmrCdtTrf>
+            <GrpHdr>
+                <MsgId>CHAPS-TEST-001</MsgId>
+                <CreDtTm>2026-05-06T09:00:00Z</CreDtTm>
+                <NbOfTxs>1</NbOfTxs>
+                <SttlmInf><SttlmMtd>CLRG</SttlmMtd></SttlmInf>
+            </GrpHdr>
+            <CdtTrfTxInf>
+                <PmtId><EndToEndId>ORDER-123</EndToEndId></PmtId>
+                <IntrBkSttlmAmt Ccy="GBP">100.00</IntrBkSttlmAmt>
+                <DbtrAgt><FinInstnId><BICFI>BANKUK22</BICFI></FinInstnId></DbtrAgt>
+                <CdtrAgt><FinInstnId><BICFI>CHAPSGB2L</BICFI></FinInstnId></CdtrAgt>
+            </CdtTrfTxInf>
+        </FIToFICstmrCdtTrf>
+    </Document>
+</BizMsg>
