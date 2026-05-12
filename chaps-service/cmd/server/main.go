@@ -58,14 +58,7 @@ func main() {
 
 	// 4. Set up routes and start
 	mux := http.NewServeMux()
-
-	// Payments
-	mux.HandleFunc("POST /v1/payments/chaps", srv.ProcessPayment)
-	mux.HandleFunc("GET /v1/payments/chaps/{id}", srv.GetPayment)
-
-	// Participants
-	mux.HandleFunc("POST /v1/participants/{bic}/block", srv.BlockParticipant)
-	mux.HandleFunc("DELETE /v1/participants/{bic}/block", srv.UnblockParticipant)
+	srv.RegisterRoutes(mux)
 
 	log.Fatal(http.ListenAndServe(":8080", mux))
 }

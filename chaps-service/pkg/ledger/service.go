@@ -91,6 +91,60 @@ func (s *LedgerService) GetPaymentDetails(ctx context.Context, msgID string) (ma
 	return details, nil
 }
 
+// RegisterParticipant initializes a bank across all normalized tables.
+func (s *LedgerService) RegisterParticipant(ctx context.Context, bic, name string, initialBalance float64) error {
+	return pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+		// 1. Create Profile
+		if _, err := tx.Exec(ctx, "INSERT INTO participant_profiles (bic_code, name) VALUES ($1, $2)", bic, name); err != nil {
+			return err
+		}
+		// 2. Create Status (Defaults to ACTIVE)
+		if _, err := tx.Exec(ctx, "INSERT INTO participant_statuses (bic_code) VALUES ($1)", bic); err != nil {
+			return err
+		}
+		// 3. Create Liquidity Account
+		if _, err := tx.Exec(ctx, "INSERT INTO participant_liquidity (bic_code, balance) VALUES ($1, $2)", bic, initialBalance); err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
+// UnblockParticipant restores a bank to ACTIVE status.
+func (s *LedgerService) UnblockParticipant(ctx context.Context, bic string) error {
+	_, err := s.Pool.Exec(ctx, `
+		UPDATE participant_statuses 
+		SET status = 'ACTIVE', block_reason = NULL, blocked_at = NULL, updated_at = NOW() 
+		WHERE bic_code = $1`, bic)
+	return err
+}
+
+type Position struct {
+	BIC       string  `json:"bic"`
+	Balance   float64 `json:"balance"`
+	Earmarked float64 `json:"earmarked"` // For future implementation of Reservation logic
+	Available float64 `json:"available"`
+}
+
+func (s *LedgerService) GetPosition(ctx context.Context, bic string) (Position, error) {
+	var p Position
+	err := s.Pool.QueryRow(ctx, `
+		SELECT bic_code, balance 
+		FROM participant_liquidity 
+		WHERE bic_code = $1`, bic).Scan(&p.BIC, &p.Balance)
+	
+	p.Available = p.Balance // Simplified for now
+	return p, err
+}
+
+func (s *LedgerService) TopUpLiquidity(ctx context.Context, bic string, amount float64) error {
+	_, err := s.Pool.Exec(ctx, `
+		UPDATE participant_liquidity 
+		SET balance = balance + $1, updated_at = NOW() 
+		WHERE bic_code = $2`, amount, bic)
+	return err
+}
+
 func (s *LedgerService) SettlePayment(ctx context.Context, msgID string, sender string, receiver string, amount float64) (SettlementResult, error) {
 	var result SettlementResult
 

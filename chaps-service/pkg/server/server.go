@@ -16,6 +16,21 @@ type Server struct {
 	Ledger    *ledger.LedgerService
 }
 
+func (s *Server) RegisterRoutes(mux *http.ServeMux) {
+	// Participant Admin
+	mux.HandleFunc("POST /v1/participants/register", s.handleRegister)
+	mux.HandleFunc("POST /v1/participants/{bic}/block", s.BlockParticipant)
+	mux.HandleFunc("DELETE /v1/participants/{bic}/block", s.UnblockParticipant)
+	mux.HandleFunc("GET /v1/participants/{bic}/positions", s.handleGetPosition)
+
+	// Liquidity Simulation
+	mux.HandleFunc("POST /v1/liquidity/top-up", s.handleTopUp)
+
+	// Core Payments (pacs.008)
+	mux.HandleFunc("POST /v1/payments/chaps", s.ProcessPayment)
+	mux.HandleFunc("GET /v1/payments/chaps/{id}", s.GetPayment)
+}
+
 func (s *Server) GetPayment(w http.ResponseWriter, r *http.Request) {
 	// Correct way to get {id} in Go 1.22+
 	msgID := r.PathValue("id")
@@ -35,6 +50,82 @@ func (s *Server) GetPayment(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	// Note: ensure you import "encoding/json" in server.go
 	json.NewEncoder(w).Encode(details)
+}
+
+// handleRegister handles the onboarding of a new bank.
+func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		BIC     string  `json:"bic"`
+		Name    string  `json:"name"`
+		Balance float64 `json:"balance"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Basic validation
+	if req.BIC == "" || req.Name == "" {
+		http.Error(w, "BIC and Name are required", http.StatusBadRequest)
+		return
+	}
+
+	err := s.Ledger.RegisterParticipant(r.Context(), req.BIC, req.Name, req.Balance)
+	if err != nil {
+		log.Printf("Failed to register participant %s: %v", req.BIC, err)
+		http.Error(w, "Failed to create participant", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+}
+
+// handleGetPosition returns the current liquidity standing of a participant.
+func (s *Server) handleGetPosition(w http.ResponseWriter, r *http.Request) {
+	bic := r.PathValue("bic")
+
+	if bic == "" {
+		http.Error(w, "BIC required", http.StatusBadRequest)
+		return
+	}
+
+	pos, err := s.Ledger.GetPosition(r.Context(), bic)
+	if err != nil {
+		log.Printf("Error fetching position for %s: %v", bic, err)
+		http.Error(w, "Participant not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(pos)
+}
+
+// handleTopUp simulates a central bank liquidity injection.
+func (s *Server) handleTopUp(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		BIC    string  `json:"bic"`
+		Amount float64 `json:"amount"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Amount <= 0 {
+		http.Error(w, "Amount must be positive", http.StatusBadRequest)
+		return
+	}
+
+	err := s.Ledger.TopUpLiquidity(r.Context(), req.BIC, req.Amount)
+	if err != nil {
+		log.Printf("Liquidity top-up failed for %s: %v", req.BIC, err)
+		http.Error(w, "Failed to update liquidity", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) BlockParticipant(w http.ResponseWriter, r *http.Request) {
@@ -57,15 +148,15 @@ func (s *Server) BlockParticipant(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) UnblockParticipant(w http.ResponseWriter, r *http.Request) {
-    bic := r.PathValue("bic")
-    
-    err := s.Ledger.UpdateParticipantStatus(r.Context(), bic, "ACTIVE", "")
-    if err != nil {
-        http.Error(w, "Internal Server Error", 500)
-        return
-    }
+	bic := r.PathValue("bic")
 
-    w.WriteHeader(http.StatusNoContent)
+	err := s.Ledger.UpdateParticipantStatus(r.Context(), bic, "ACTIVE", "")
+	if err != nil {
+		http.Error(w, "Internal Server Error", 500)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) ProcessPayment(w http.ResponseWriter, r *http.Request) {
