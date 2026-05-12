@@ -12,7 +12,7 @@
 | **POST** | `/v1/participants/register` | Initial onboarding of a bank's BIC and settlement account. | 🚧 |
 | **PATCH** | `/v1/participants/{bic}/status` | Updates visibility (e.g., `ACTIVE`, `SUSPENDED`, `DISABLED`). | ❌ |
 | **POST** | `/v1/participants/{bic}/block` | Immediate "Kill-switch." Halts all outbound settlement instructions. | 🚧 |
-| **GET** | `/v1/participants/{bic}/block` | Returns details: who blocked the bank, when, and the reason (e.g., `FRAUD_SUSPECTED`). | 🚧elopent |
+| **GET** | `/v1/participants/{bic}/block` | Returns details: who blocked the bank, when, and the reason (e.g., `FRAUD_SUSPECTED`). | 🚧 |
 | **DELETE** | `/v1/participants/{bic}/block` | Unblocks the participant and restores settlement rights. | ✔️ |
 | **GET** | `/v1/participants/{bic}/positions` | Real-time view of `Earmarked` vs. `Available` liquidity. |🚧 |
 | **GET** | `/v1/system/schedule` | Returns today's cut-off times (which can change on bank holidays). | 🚧 |
