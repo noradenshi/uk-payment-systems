@@ -22,21 +22,26 @@ type Pacs002Message struct {
 			StsId           string `xml:"StsId"`
 			OrgnlEndToEndId string `xml:"OrgnlEndToEndId"` // More common in .16 than OrgnlMsgId here
 			TxSts           string `xml:"TxSts"`
-			InstgAgt struct {
-				FinInstnId struct {
-					BICFI string `xml:"BICFI"`
-				} `xml:"FinInstnId"`
-			} `xml:"InstgAgt"`
-			InstdAgt struct {
-				FinInstnId struct {
-					BICFI string `xml:"BICFI"`
-				} `xml:"FinInstnId"`
-			} `xml:"InstdAgt"`
+			StsRsnInf *StatusReasonInformation `xml:"StsRsnInf,omitempty"`
+			InstgAgt FinancialAgent `xml:"InstgAgt"`
+			InstdAgt FinancialAgent `xml:"InstdAgt"`
 		} `xml:"TxInfAndSts"`
 	} `xml:"FIToFIPmtStsRpt"`
 }
 
-func NewPacs002(orgnlMsgId, e2eId, status, senderBic, receiverBic string) *Pacs002Message {
+type StatusReasonInformation struct {
+	Rsn struct {
+		Cd string `xml:"Cd"` // The ISO Code (e.g., XMLI, INSU)
+	} `xml:"Rsn"`
+}
+
+type FinancialAgent struct {
+	FinInstnId struct {
+		BICFI string `xml:"BICFI"`
+	} `xml:"FinInstnId"`
+}
+
+func NewPacs002(orgnlMsgId, e2eId, status, senderBic, receiverBic string, reasonCode string) *Pacs002Message {
 	m := &Pacs002Message{
 		Xmlns: "urn:iso:std:iso:20022:tech:xsd:pacs.002.001.16",
 	}
@@ -51,6 +56,12 @@ func NewPacs002(orgnlMsgId, e2eId, status, senderBic, receiverBic string) *Pacs0
 	m.PmtStsRpt.TxInfAndSts.StsId = "STAT-" + orgnlMsgId
 	m.PmtStsRpt.TxInfAndSts.OrgnlEndToEndId = e2eId
 	m.PmtStsRpt.TxInfAndSts.TxSts = status
+
+	// If a reason code is provided (usually for RJCT or PDNG), populate the block
+	if reasonCode != "" {
+		m.PmtStsRpt.TxInfAndSts.StsRsnInf = &StatusReasonInformation{}
+		m.PmtStsRpt.TxInfAndSts.StsRsnInf.Rsn.Cd = reasonCode
+	}
 	
 	m.PmtStsRpt.TxInfAndSts.InstgAgt.FinInstnId.BICFI = receiverBic 
 	m.PmtStsRpt.TxInfAndSts.InstdAgt.FinInstnId.BICFI = senderBic

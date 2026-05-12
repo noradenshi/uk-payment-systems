@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<BusinessMessage>
+<BizMsg>
     <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.02">
         <Fr><FIId><FinInstnId><BICFI>SNDRUK22</BICFI></FinInstnId></FIId></Fr>
         <To><FIId><FinInstnId><BICFI>RCVRUK22</BICFI></FinInstnId></FIId></To>
@@ -42,4 +42,4 @@
             </CdtTrfTxInf>
         </FIToFICstmrCdtTrf>
     </Document>
-</BusinessMessage>
+</BizMsg>
