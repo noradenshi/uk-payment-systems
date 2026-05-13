@@ -14,7 +14,12 @@ services:
       - "5432:5432"
     volumes:
       - ./internal/db:/docker-entrypoint-initdb.d:ro
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chaps_admin -d chaps_ledger"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   app:
     build: .
@@ -25,7 +30,8 @@ services:
     environment:
       DATABASE_URL: "postgres://chaps_admin:password123@db:5432/chaps_ledger"
     depends_on:
-      - db
+      db:
+        condition: service_healthy
 
 volumes:
   postgres_data:
