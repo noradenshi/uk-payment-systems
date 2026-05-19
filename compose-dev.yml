@@ -1,0 +1,44 @@
+services:
+  chaps-db:
+    image: postgres:18-alpine
+    container_name: chaps_db_dev
+    environment:
+      POSTGRES_USER: chaps_admin
+      POSTGRES_PASSWORD: password123
+      POSTGRES_DB: chaps_ledger
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./chaps-service/internal/db:/docker-entrypoint-initdb.d:ro
+      - chaps_data_dev:/var/lib/postgresql
+
+  fps-db:
+    image: postgres:18-alpine
+    container_name: fps_db_dev
+    environment:
+      POSTGRES_USER: fps_admin
+      POSTGRES_PASSWORD: password123
+      POSTGRES_DB: fps_ledger
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./fps-service/internal/db:/docker-entrypoint-initdb.d:ro
+      - fps_data_dev:/var/lib/postgresql
+
+  bacs-db:
+    image: postgres:18-alpine
+    container_name: bacs_db_dev
+    environment:
+      POSTGRES_USER: bacs_admin
+      POSTGRES_PASSWORD: password123
+      POSTGRES_DB: bacs_ledger
+    ports:
+      - "5434:5432"
+    volumes:
+      - ./bacs-service/internal/db:/docker-entrypoint-initdb.d:ro
+      - bacs_data_dev:/var/lib/postgresql
+
+volumes:
+  chaps_data_dev:
+  fps_data_dev:
+  bacs_data_dev:
