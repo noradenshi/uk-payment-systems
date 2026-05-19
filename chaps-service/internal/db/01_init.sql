@@ -19,6 +19,8 @@ CREATE TABLE participant_statuses (
     bic_code VARCHAR(11) PRIMARY KEY REFERENCES participant_profiles(bic_code),
     status participant_status DEFAULT 'ACTIVE',
     is_closed BOOLEAN DEFAULT FALSE,
+    overdraft_limit DECIMAL(20, 2) NOT NULL DEFAULT 30000000.00,
+    liquidity_breach_at TIMESTAMP WITH TIME ZONE,
     blocked_at TIMESTAMP WITH TIME ZONE,
     block_reason TEXT,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()

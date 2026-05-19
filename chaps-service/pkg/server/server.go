@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -24,6 +26,7 @@ type Server struct {
 var reBIC = regexp.MustCompile(`^[A-Z0-9]{8,11}$`)
 
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("OPTIONS /", handleOptions)
 	mux.HandleFunc("POST /v1/participants/register", s.handleRegister)
 	mux.HandleFunc("GET /v1/participants", s.handleListParticipants)
 	mux.HandleFunc("PATCH /v1/participants/{bic}/status", s.handleUpdateParticipantStatus)
@@ -38,6 +41,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/payments/chaps", s.handleListPayments)
 	mux.HandleFunc("POST /v1/payments/chaps/validate", s.handleValidatePayment)
 	mux.HandleFunc("GET /v1/payments/chaps/limits", s.handleGetLimits)
+	mux.HandleFunc("PATCH /v1/payments/chaps/limits/{bic}", s.handleUpdateLimit)
+	mux.HandleFunc("POST /v1/payments/chaps/gridlock/resolve", s.handleResolveGridlock)
 	mux.HandleFunc("POST /v1/payments/chaps/{id}/authorize", s.handleAuthorizePayment)
 	mux.HandleFunc("GET /v1/payments/chaps/{id}", s.GetPayment)
 	mux.HandleFunc("DELETE /v1/payments/chaps/{id}", s.handleCancelPayment)
@@ -47,6 +52,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload interface{}) {
+	setCORS(w)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if payload != nil {
@@ -60,6 +66,37 @@ func badRequest(w http.ResponseWriter, message string) {
 
 func validateBIC(bic string) bool {
 	return reBIC.MatchString(bic)
+}
+
+func setCORS(w http.ResponseWriter) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Idempotency-Key,X-Digital-Signature")
+}
+
+func handleOptions(w http.ResponseWriter, r *http.Request) {
+	setCORS(w)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func loadGlobalSchedule(system string) map[string]interface{} {
+	paths := []string{os.Getenv("UKPS_CONFIG_PATH"), "config/sessions.json", "../config/sessions.json", "../../config/sessions.json"}
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var cfg map[string]map[string]interface{}
+		if err := json.Unmarshal(data, &cfg); err == nil {
+			if entry, ok := cfg[system]; ok {
+				return entry
+			}
+		}
+	}
+	return map[string]interface{}{}
 }
 
 func (s *Server) GetPayment(w http.ResponseWriter, r *http.Request) {
@@ -452,6 +489,41 @@ func (s *Server) handleGetLimits(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, limits)
 }
 
+func (s *Server) handleUpdateLimit(w http.ResponseWriter, r *http.Request) {
+	bic := r.PathValue("bic")
+	if !validateBIC(bic) {
+		badRequest(w, "Invalid BIC format")
+		return
+	}
+	var req struct {
+		OverdraftLimit *float64 `json:"overdraft_limit"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		badRequest(w, "Invalid request body")
+		return
+	}
+	if req.OverdraftLimit == nil || *req.OverdraftLimit < 0 {
+		badRequest(w, "overdraft_limit must be a non-negative number")
+		return
+	}
+	if err := s.Ledger.UpdateOverdraftLimit(r.Context(), bic, *req.OverdraftLimit); err != nil {
+		log.Printf("Failed to update overdraft limit for %s: %v", bic, err)
+		http.Error(w, "Failed to update limit", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"bic": bic, "overdraft_limit": *req.OverdraftLimit})
+}
+
+func (s *Server) handleResolveGridlock(w http.ResponseWriter, r *http.Request) {
+	settled, err := s.Ledger.ResolveGridlock(r.Context())
+	if err != nil {
+		log.Printf("Gridlock resolution failed: %v", err)
+		http.Error(w, "Gridlock resolution failed", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "COMPLETED", "settled": settled})
+}
+
 func (s *Server) handleAuthorizePayment(w http.ResponseWriter, r *http.Request) {
 	msgID := r.PathValue("id")
 	if msgID == "" {
@@ -524,12 +596,26 @@ func (s *Server) handleAmendPayment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSystemSchedule(w http.ResponseWriter, r *http.Request) {
+	cfg := loadGlobalSchedule("chaps")
+	opening, _ := cfg["opening_time"].(string)
+	customerCutoff, _ := cfg["customer_cutoff"].(string)
+	interbankCutoff, _ := cfg["interbank_cutoff"].(string)
+	if opening == "" {
+		opening = "06:00"
+	}
+	if customerCutoff == "" {
+		customerCutoff = "17:40"
+	}
+	if interbankCutoff == "" {
+		interbankCutoff = "18:00"
+	}
 	writeJSON(w, http.StatusOK, map[string]string{
 		"date":              time.Now().Format("2006-01-02"),
-		"opening_time":      "06:00",
-		"customer_cutoff":   "17:40",
-		"interbank_cutoff": "18:00",
+		"opening_time":      opening,
+		"customer_cutoff":   customerCutoff,
+		"interbank_cutoff":  interbankCutoff,
 		"timezone":          "Europe/London",
+		"demo_session_minutes": fmt.Sprint(cfg["demo_session_minutes"]),
 	})
 }
 

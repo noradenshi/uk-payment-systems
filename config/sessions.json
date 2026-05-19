@@ -1,0 +1,20 @@
+{
+  "bacs": {
+    "input_cutoff": "22:30",
+    "processing_duration_minutes": 1440,
+    "settlement_duration_minutes": 1440,
+    "demo_session_minutes": 15
+  },
+  "fps": {
+    "opening_time": "00:00",
+    "closing_time": "23:59",
+    "settlement_times": ["03:00", "09:00", "12:00", "15:00", "18:00", "21:00"],
+    "demo_session_minutes": 15
+  },
+  "chaps": {
+    "opening_time": "06:00",
+    "customer_cutoff": "17:40",
+    "interbank_cutoff": "18:00",
+    "demo_session_minutes": 15
+  }
+}
