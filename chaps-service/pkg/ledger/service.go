@@ -25,9 +25,12 @@ var ErrAccountNotFound = errors.New("account not found")
 var ErrAccountClosed = errors.New("account closed")
 var ErrSanctionsBlock = errors.New("sanctions block")
 
+const singlePaymentLimit = 20000000.00
+const dailyParticipantLimit = 100000000.00
+
 type SettlementResult struct {
-	Status     string // SETTLED, RJCT, PDNG
-	ReasonCode string // INSU, AC01, etc.
+	Status     string
+	ReasonCode string
 }
 
 type PaymentSummary struct {
@@ -40,12 +43,12 @@ type PaymentSummary struct {
 }
 
 type ParticipantSummary struct {
-	BIC       string  `json:"bic"`
-	Name      string  `json:"name"`
-	Status    string  `json:"status"`
-	Balance   float64 `json:"balance"`
-	Currency  string  `json:"currency"`
-	IsClosed  bool    `json:"is_closed"`
+	BIC         string  `json:"bic"`
+	Name        string  `json:"name"`
+	Status      string  `json:"status"`
+	Balance     float64 `json:"balance"`
+	Currency    string  `json:"currency"`
+	IsClosed    bool    `json:"is_closed"`
 	BlockReason *string `json:"block_reason,omitempty"`
 }
 
@@ -57,18 +60,25 @@ type PaymentValidation struct {
 }
 
 type ClearingLimits struct {
-	Currency                  string  `json:"currency"`
-	SinglePaymentLimit        float64 `json:"single_payment_limit"`
+	Currency                   string  `json:"currency"`
+	SinglePaymentLimit         float64 `json:"single_payment_limit"`
 	DailyParticipantLimit      float64 `json:"daily_participant_limit"`
-	TotalAvailableLiquidity   float64 `json:"total_available_liquidity"`
+	TotalAvailableLiquidity    float64 `json:"total_available_liquidity"`
 	RemainingIntradayLiquidity float64 `json:"remaining_intraday_liquidity"`
+}
+
+type Position struct {
+	BIC       string  `json:"bic"`
+	Balance   float64 `json:"balance"`
+	Earmarked float64 `json:"earmarked"`
+	Available float64 `json:"available"`
 }
 
 func (s *LedgerService) BlockParticipant(ctx context.Context, bic string, reason string) error {
 	return pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
-            UPDATE participant_statuses 
-            SET status = 'SUSPENDED', block_reason = $1, blocked_at = NOW() 
+            UPDATE participant_statuses
+            SET status = 'SUSPENDED', block_reason = $1, blocked_at = NOW()
             WHERE bic_code = $2`, reason, bic)
 		return err
 	})
@@ -77,7 +87,7 @@ func (s *LedgerService) BlockParticipant(ctx context.Context, bic string, reason
 func (s *LedgerService) UpdateParticipantStatus(ctx context.Context, bic string, status string, reason string) error {
 	return pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
-			UPDATE participant_statuses 
+			UPDATE participant_statuses
 			SET status = $1::participant_status, block_reason = NULLIF($2, ''), blocked_at = CASE WHEN $1 = 'SUSPENDED' THEN NOW() ELSE NULL END, updated_at = NOW()
 			WHERE bic_code = $3`, status, reason, bic)
 		return err
@@ -120,7 +130,8 @@ func (s *LedgerService) ListPayments(ctx context.Context, status string, limit i
 		query += " WHERE status = $1"
 		args = append(args, status)
 	}
-	query += fmt.Sprintf(" ORDER BY created_at DESC LIMIT %d", limit)
+	query += " ORDER BY created_at DESC LIMIT $2"
+	args = append(args, limit)
 
 	rows, err := s.Pool.Query(ctx, query, args...)
 	if err != nil {
@@ -153,60 +164,62 @@ func (s *LedgerService) ValidatePayment(ctx context.Context, sender, receiver st
 		result.Valid = false
 		result.Errors = append(result.Errors, "Amount must be positive")
 	}
-
-	var status string
-	var isClosed bool
-	err := s.Pool.QueryRow(ctx, "SELECT status::text, is_closed FROM participant_statuses WHERE bic_code = $1", sender).Scan(&status, &isClosed)
-	if err != nil {
+	if amount > singlePaymentLimit {
 		result.Valid = false
-		result.Errors = append(result.Errors, "Sender participant not found")
-		return result, nil
-	}
-	if status != "ACTIVE" || isClosed {
-		result.Valid = false
-		result.Errors = append(result.Errors, "Sender is not active")
+		result.Errors = append(result.Errors, fmt.Sprintf("Amount exceeds single payment limit of £%.0f", singlePaymentLimit))
 	}
 
-	err = s.Pool.QueryRow(ctx, "SELECT balance FROM participant_liquidity WHERE bic_code = $1", sender).Scan(&result.Available)
-	if err != nil {
-		return result, err
-	}
-	if result.Available < amount {
-		result.Valid = false
-		result.Errors = append(result.Errors, "Insufficient liquidity")
+	for _, bic := range []string{sender, receiver} {
+		var status string
+		var isClosed bool
+		err := s.Pool.QueryRow(ctx, "SELECT status::text, is_closed FROM participant_statuses WHERE bic_code = $1", bic).Scan(&status, &isClosed)
+		if err != nil {
+			result.Valid = false
+			result.Errors = append(result.Errors, fmt.Sprintf("%s participant not found", bic))
+			continue
+		}
+		if status != "ACTIVE" || isClosed {
+			result.Valid = false
+			result.Errors = append(result.Errors, fmt.Sprintf("%s is not active", bic))
+		}
 	}
 
-	var receiverExists bool
-	err = s.Pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM participant_profiles WHERE bic_code = $1)", receiver).Scan(&receiverExists)
+	var available float64
+	err := s.Pool.QueryRow(ctx, "SELECT balance FROM participant_liquidity WHERE bic_code = $1", sender).Scan(&available)
 	if err != nil {
-		return result, err
+		result.Errors = append(result.Errors, "Sender liquidity unavailable")
+	} else {
+		result.Available = available
+		if available < amount {
+			result.Valid = false
+			result.Errors = append(result.Errors, "Insufficient liquidity")
+		}
 	}
-	if !receiverExists {
-		result.Valid = false
-		result.Errors = append(result.Errors, "Receiver participant not found")
-	}
+
 	return result, nil
 }
 
 func (s *LedgerService) CancelPayment(ctx context.Context, msgID string) (bool, error) {
-	tag, err := s.Pool.Exec(ctx, "UPDATE transactions SET status = 'REJECTED' WHERE msg_id = $1 AND status = 'PENDING'", msgID)
+	tag, err := s.Pool.Exec(ctx, "UPDATE transactions SET status = 'REJECTED' WHERE msg_id = $1 AND (status = 'PENDING' OR status = 'QUEUED')", msgID)
 	if err != nil {
 		return false, err
 	}
 	return tag.RowsAffected() > 0, nil
 }
 
-func (s *LedgerService) AmendPayment(ctx context.Context, msgID string) (bool, error) {
-	var exists bool
-	err := s.Pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM transactions WHERE msg_id = $1 AND status = 'PENDING')", msgID).Scan(&exists)
-	return exists, err
+func (s *LedgerService) AmendPayment(ctx context.Context, msgID string, endToEndID string) (bool, error) {
+	tag, err := s.Pool.Exec(ctx, "UPDATE transactions SET end_to_end_id = COALESCE(NULLIF($1, ''), end_to_end_id) WHERE msg_id = $2 AND status = 'PENDING'", endToEndID, msgID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 func (s *LedgerService) GetClearingLimits(ctx context.Context, bic string) (ClearingLimits, error) {
 	limits := ClearingLimits{
-		Currency:             "GBP",
-		SinglePaymentLimit:   20000000,
-		DailyParticipantLimit: 100000000,
+		Currency:              "GBP",
+		SinglePaymentLimit:    singlePaymentLimit,
+		DailyParticipantLimit: dailyParticipantLimit,
 	}
 	row := s.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(balance), 0) FROM participant_liquidity")
 	if err := row.Scan(&limits.TotalAvailableLiquidity); err != nil {
@@ -234,34 +247,38 @@ func (s *LedgerService) GetBlockDetails(ctx context.Context, bic string) (map[st
 		return nil, err
 	}
 	return map[string]interface{}{
-		"bic": bic,
-		"status": status,
+		"bic":        bic,
+		"status":     status,
 		"blocked_at": blockedAt,
-		"reason": reason,
-		"blocked_by": "CHAPS_OPERATOR",
+		"reason":     reason,
 	}, nil
 }
 
 func (s *LedgerService) GetPaymentDetails(ctx context.Context, msgID string) (map[string]interface{}, error) {
 	var details = make(map[string]interface{})
 
-	// 1. Get Core Transaction
 	var status string
 	var amount float64
 	var internalID pgtype.UUID
+	var senderBic string
+	var receiverBic string
+	var endToEndID *string
+	var createdAt time.Time
 
 	err := s.Pool.QueryRow(ctx,
-		"SELECT id, status, amount FROM transactions WHERE msg_id = $1",
-		msgID).Scan(&internalID, &status, &amount)
-
+		"SELECT id, status, amount, sender_bic, receiver_bic, end_to_end_id, created_at FROM transactions WHERE msg_id = $1",
+		msgID).Scan(&internalID, &status, &amount, &senderBic, &receiverBic, &endToEndID, &createdAt)
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. Get Audit Trail (Journal)
-	rows, _ := s.Pool.Query(ctx,
+	rows, err := s.Pool.Query(ctx,
 		"SELECT account_bic, amount FROM journal_entries WHERE transaction_id = $1",
 		internalID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
 
 	type entry struct {
 		BIC    string  `json:"bic"`
@@ -271,31 +288,35 @@ func (s *LedgerService) GetPaymentDetails(ctx context.Context, msgID string) (ma
 
 	for rows.Next() {
 		var e entry
-		if err := rows.Scan(&e.BIC, &e.Amount); err == nil {
-			journal = append(journal, e)
+		if err := rows.Scan(&e.BIC, &e.Amount); err != nil {
+			log.Printf("Scan error in journal for %s: %v", msgID, err)
+			continue
 		}
+		journal = append(journal, e)
 	}
 
 	details["msg_id"] = msgID
 	details["status"] = status
 	details["amount"] = amount
+	details["sender_bic"] = senderBic
+	details["receiver_bic"] = receiverBic
+	details["created_at"] = createdAt
+	if endToEndID != nil {
+		details["end_to_end_id"] = *endToEndID
+	}
 	details["audit_trail"] = journal
 
 	return details, nil
 }
 
-// RegisterParticipant initializes a bank across all normalized tables.
 func (s *LedgerService) RegisterParticipant(ctx context.Context, bic, name string, initialBalance float64) error {
 	return pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
-		// 1. Create Profile
 		if _, err := tx.Exec(ctx, "INSERT INTO participant_profiles (bic_code, name) VALUES ($1, $2)", bic, name); err != nil {
 			return err
 		}
-		// 2. Create Status (Defaults to ACTIVE)
 		if _, err := tx.Exec(ctx, "INSERT INTO participant_statuses (bic_code) VALUES ($1)", bic); err != nil {
 			return err
 		}
-		// 3. Create Liquidity Account
 		if _, err := tx.Exec(ctx, "INSERT INTO participant_liquidity (bic_code, balance) VALUES ($1, $2)", bic, initialBalance); err != nil {
 			return err
 		}
@@ -303,43 +324,54 @@ func (s *LedgerService) RegisterParticipant(ctx context.Context, bic, name strin
 	})
 }
 
-// UnblockParticipant restores a bank to ACTIVE status.
 func (s *LedgerService) UnblockParticipant(ctx context.Context, bic string) error {
 	_, err := s.Pool.Exec(ctx, `
-		UPDATE participant_statuses 
-		SET status = 'ACTIVE', block_reason = NULL, blocked_at = NULL, updated_at = NOW() 
+		UPDATE participant_statuses
+		SET status = 'ACTIVE', block_reason = NULL, blocked_at = NULL, updated_at = NOW()
 		WHERE bic_code = $1`, bic)
 	return err
-}
-
-type Position struct {
-	BIC       string  `json:"bic"`
-	Balance   float64 `json:"balance"`
-	Earmarked float64 `json:"earmarked"` // For future implementation of Reservation logic
-	Available float64 `json:"available"`
 }
 
 func (s *LedgerService) GetPosition(ctx context.Context, bic string) (Position, error) {
 	var p Position
 	err := s.Pool.QueryRow(ctx, `
-		SELECT bic_code, balance 
-		FROM participant_liquidity 
+		SELECT bic_code, balance
+		FROM participant_liquidity
 		WHERE bic_code = $1`, bic).Scan(&p.BIC, &p.Balance)
-	
-	p.Available = p.Balance // Simplified for now
+
+	p.Available = p.Balance
 	return p, err
 }
 
 func (s *LedgerService) TopUpLiquidity(ctx context.Context, bic string, amount float64) error {
 	_, err := s.Pool.Exec(ctx, `
-		UPDATE participant_liquidity 
-		SET balance = balance + $1, updated_at = NOW() 
+		UPDATE participant_liquidity
+		SET balance = balance + $1, updated_at = NOW()
 		WHERE bic_code = $2`, amount, bic)
 	return err
 }
 
-func (s *LedgerService) SettlePayment(ctx context.Context, msgID string, sender string, receiver string, amount float64) (SettlementResult, error) {
+func (s *LedgerService) checkDailyLimit(ctx context.Context, tx pgx.Tx, sender string, amount float64) error {
+	var dayTotal float64
+	err := tx.QueryRow(ctx, `
+		SELECT COALESCE(SUM(amount), 0) FROM transactions
+		WHERE sender_bic = $1 AND status = 'SETTLED'
+		AND created_at >= CURRENT_DATE`, sender).Scan(&dayTotal)
+	if err != nil {
+		return err
+	}
+	if dayTotal+amount > dailyParticipantLimit {
+		return fmt.Errorf("daily participant limit of £%.0f exceeded", dailyParticipantLimit)
+	}
+	return nil
+}
+
+func (s *LedgerService) SettlePayment(ctx context.Context, msgID string, sender string, receiver string, amount float64, endToEndID string) (SettlementResult, error) {
 	var result SettlementResult
+
+	if amount > singlePaymentLimit {
+		return SettlementResult{Status: "RJCT", ReasonCode: "AM05"}, nil
+	}
 
 	err := pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
 		var senderExists bool
@@ -355,87 +387,93 @@ func (s *LedgerService) SettlePayment(ctx context.Context, msgID string, sender 
 			return nil
 		}
 
-		// 1. Initial Transaction Entry
-		// We insert the transaction first to get the UUID v7 generated by Postgres 18.
-		// We use ON CONFLICT to prevent double-processing the same MsgId.
 		var internalUUID pgtype.UUID
 		var currentStatus string
+		var existingSender, existingReceiver string
+		var existingAmount float64
+
 		err := tx.QueryRow(ctx, `
-			INSERT INTO transactions (msg_id, sender_bic, receiver_bic, amount, status)
-			VALUES ($1, $2, $3, $4, 'PENDING')
+			INSERT INTO transactions (msg_id, sender_bic, receiver_bic, amount, status, end_to_end_id)
+			VALUES ($1, $2, $3, $4, 'PENDING', $5)
 			ON CONFLICT (msg_id) DO UPDATE SET msg_id = EXCLUDED.msg_id
-			RETURNING id, status`,
-			msgID, sender, receiver, amount).Scan(&internalUUID, &currentStatus)
+			RETURNING id, status, sender_bic, receiver_bic, amount`,
+			msgID, sender, receiver, amount, endToEndID).Scan(&internalUUID, &currentStatus, &existingSender, &existingReceiver, &existingAmount)
 
 		if err != nil {
 			return fmt.Errorf("failed to initialize transaction: %w", err)
 		}
 
-		// IDEMPOTENCY GATE: If already settled, stop here and return success
 		if currentStatus == "SETTLED" {
+			if existingSender != sender || existingReceiver != receiver || existingAmount != amount {
+				result = SettlementResult{Status: "RJCT", ReasonCode: "AM05"}
+				return nil
+			}
 			log.Printf("Idempotent hit for MsgId: %s. Returning cached result.", msgID)
 			result = SettlementResult{Status: "ACTC", ReasonCode: ""}
 			return nil
 		}
 
-		// 2. Fetch and Lock Sender with Status Check
-		var participantStatus string
-		var isClosed bool
-		err = tx.QueryRow(ctx,
-			"SELECT status, is_closed FROM participant_statuses WHERE bic_code = $1 FOR UPDATE",
-			sender).Scan(&participantStatus, &isClosed)
+		for _, bic := range []string{sender, receiver} {
+			var participantStatus string
+			var isClosed bool
+			err = tx.QueryRow(ctx,
+				"SELECT status, is_closed FROM participant_statuses WHERE bic_code = $1 FOR UPDATE",
+				bic).Scan(&participantStatus, &isClosed)
+			if err == pgx.ErrNoRows {
+				result = SettlementResult{Status: "RJCT", ReasonCode: "AC01"}
+				tx.Exec(ctx, "UPDATE transactions SET status = 'REJECTED' WHERE id = $1", internalUUID)
+				return nil
+			}
+			if isClosed || participantStatus != "ACTIVE" {
+				result = SettlementResult{Status: "RJCT", ReasonCode: "AC04"}
+				tx.Exec(ctx, "UPDATE transactions SET status = 'REJECTED' WHERE id = $1", internalUUID)
+				return nil
+			}
+		}
 
-		if err == pgx.ErrNoRows {
-			result = SettlementResult{Status: "RJCT", ReasonCode: "AC01"}
+		if err := s.checkDailyLimit(ctx, tx, sender, amount); err != nil {
+			result = SettlementResult{Status: "RJCT", ReasonCode: "AM05"}
 			tx.Exec(ctx, "UPDATE transactions SET status = 'REJECTED' WHERE id = $1", internalUUID)
 			return nil
 		}
-		if isClosed || participantStatus != "ACTIVE" {
-			result = SettlementResult{Status: "RJCT", ReasonCode: "AC04"} // Closed or Blocked
-			tx.Exec(ctx, "UPDATE transactions SET status = 'REJECTED' WHERE id = $1", internalUUID)
-			return nil
-		}
 
-		// 3. Liquidity Check
 		var balance float64
 		err = tx.QueryRow(ctx,
 			"SELECT balance FROM participant_liquidity WHERE bic_code = $1 FOR UPDATE",
 			sender).Scan(&balance)
 
 		if balance < amount {
-			// Update status to QUEUED. Since we are inside BeginFunc,
-			// if we return ErrInsufficientFunds, this update WILL rollback.
-			// To keep the 'QUEUED' status, we would typically handle this with a
-			// separate small transaction, but for now, we'll follow your logic.
 			result = SettlementResult{Status: "PDNG", ReasonCode: "INSU"}
 			_, _ = tx.Exec(ctx, "UPDATE transactions SET status = 'QUEUED' WHERE id = $1", internalUUID)
 			return nil
 		}
 
-		// 4. Execute Gross Settlement
-		// Debit Sender
+		var receiverBalance float64
+		err = tx.QueryRow(ctx,
+			"SELECT balance FROM participant_liquidity WHERE bic_code = $1 FOR UPDATE",
+			receiver).Scan(&receiverBalance)
+		if err != nil {
+			return fmt.Errorf("receiver lock failed: %w", err)
+		}
+
 		_, err = tx.Exec(ctx, "UPDATE participant_liquidity SET balance = balance - $1 WHERE bic_code = $2", amount, sender)
 		if err != nil {
 			return fmt.Errorf("debit failed: %w", err)
 		}
 
-		// Credit Receiver
 		_, err = tx.Exec(ctx, "UPDATE participant_liquidity SET balance = balance + $1 WHERE bic_code = $2", amount, receiver)
 		if err != nil {
 			return fmt.Errorf("credit failed: %w", err)
 		}
 
-		// 5. Record Journal Entries (The Immutable Audit Trail)
-		// This uses the internalUUID (UUID type) instead of the msgID (string).
 		_, err = tx.Exec(ctx, `
-			INSERT INTO journal_entries (transaction_id, account_bic, amount) 
+			INSERT INTO journal_entries (transaction_id, account_bic, amount)
 			VALUES ($1, $2, $3), ($1, $4, $5)`,
 			internalUUID, sender, -amount, receiver, amount)
 		if err != nil {
 			return fmt.Errorf("journal entry failed: %w", err)
 		}
 
-		// 6. Finalize Transaction Status
 		result = SettlementResult{Status: "ACTC", ReasonCode: ""}
 		_, err = tx.Exec(ctx, "UPDATE transactions SET status = 'SETTLED' WHERE id = $1", internalUUID)
 		return nil

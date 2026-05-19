@@ -1,21 +1,24 @@
 package iso20022
 
-import "time"
+import (
+	"encoding/xml"
+	"time"
+)
 
-// BusinessMessage is the top-level wrapper
 type BusinessMessage struct {
+	XMLName  xml.Name `xml:"BizMsg"`
 	AppHdr   AppHdr   `xml:"AppHdr"`
-	Document any      `xml:"Document"` // Can hold pacs.008, pacs.002, etc.
+	Document any      `xml:"Document"`
 }
 
 type AppHdr struct {
-	Xmlns      string    `xml:"xmlns,attr"`
-	Fr         Party     `xml:"Fr"`         // Sender
-	To         Party     `xml:"To"`         // Receiver
-	BizMsgIdr  string    `xml:"BizMsgIdr"`  // Unique ID for this specific transmission
-	MsgDefIdr  string    `xml:"MsgDefIdr"`  // e.g., "pacs.008.001.14"
-	CreDt      time.Time `xml:"CreDt"`      // Creation Date
-	Sgntr      *Signature `xml:"Sgntr,omitempty"` 
+	Xmlns     string    `xml:"xmlns,attr"`
+	Fr        Party     `xml:"Fr"`
+	To        Party     `xml:"To"`
+	BizMsgIdr string    `xml:"BizMsgIdr"`
+	MsgDefIdr string    `xml:"MsgDefIdr"`
+	CreDt     time.Time `xml:"CreDt"`
+	Sgntr     *Signature `xml:"Sgntr,omitempty"`
 }
 
 type Party struct {
@@ -27,8 +30,7 @@ type Party struct {
 }
 
 type Signature struct {
-    // This is where XMLDSig would go later
-    Any string `xml:",innerxml"`
+	Any string `xml:",innerxml"`
 }
 
 func NewBAH(from, to, msgId, msgType string) AppHdr {

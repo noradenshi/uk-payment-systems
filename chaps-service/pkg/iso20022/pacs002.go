@@ -13,14 +13,13 @@ type Pacs002Message struct {
 			MsgId   string    `xml:"MsgId"`
 			CreDtTm time.Time `xml:"CreDtTm"`
 		} `xml:"GrpHdr"`
-		// Original Group Information is usually required before transaction details
 		OrgnlGrpInfAndSts struct {
-			OrgnlMsgId string `xml:"OrgnlMsgId"`
-			OrgnlMsgNmId string `xml:"OrgnlMsgNmId"` // e.g., pacs.008.001.14
+			OrgnlMsgId  string `xml:"OrgnlMsgId"`
+			OrgnlMsgNmId string `xml:"OrgnlMsgNmId"`
 		} `xml:"OrgnlGrpInfAndSts"`
 		TxInfAndSts struct {
 			StsId           string `xml:"StsId"`
-			OrgnlEndToEndId string `xml:"OrgnlEndToEndId"` // More common in .16 than OrgnlMsgId here
+			OrgnlEndToEndId string `xml:"OrgnlEndToEndId"`
 			TxSts           string `xml:"TxSts"`
 			StsRsnInf *StatusReasonInformation `xml:"StsRsnInf,omitempty"`
 			InstgAgt FinancialAgent `xml:"InstgAgt"`
@@ -31,7 +30,7 @@ type Pacs002Message struct {
 
 type StatusReasonInformation struct {
 	Rsn struct {
-		Cd string `xml:"Cd"` // The ISO Code (e.g., XMLI, INSU)
+		Cd string `xml:"Cd"`
 	} `xml:"Rsn"`
 }
 
@@ -45,7 +44,7 @@ func NewPacs002(orgnlMsgId, e2eId, status, senderBic, receiverBic string, reason
 	m := &Pacs002Message{
 		Xmlns: "urn:iso:std:iso:20022:tech:xsd:pacs.002.001.16",
 	}
-	
+
 	now := time.Now().Truncate(time.Second)
 	m.PmtStsRpt.GrpHdr.MsgId = "ACK-" + now.Format("20060102") + "-" + orgnlMsgId
 	m.PmtStsRpt.GrpHdr.CreDtTm = now
@@ -57,14 +56,13 @@ func NewPacs002(orgnlMsgId, e2eId, status, senderBic, receiverBic string, reason
 	m.PmtStsRpt.TxInfAndSts.OrgnlEndToEndId = e2eId
 	m.PmtStsRpt.TxInfAndSts.TxSts = status
 
-	// If a reason code is provided (usually for RJCT or PDNG), populate the block
 	if reasonCode != "" {
 		m.PmtStsRpt.TxInfAndSts.StsRsnInf = &StatusReasonInformation{}
 		m.PmtStsRpt.TxInfAndSts.StsRsnInf.Rsn.Cd = reasonCode
 	}
-	
-	m.PmtStsRpt.TxInfAndSts.InstgAgt.FinInstnId.BICFI = receiverBic 
-	m.PmtStsRpt.TxInfAndSts.InstdAgt.FinInstnId.BICFI = senderBic
-	
+
+	m.PmtStsRpt.TxInfAndSts.InstgAgt.FinInstnId.BICFI = senderBic
+	m.PmtStsRpt.TxInfAndSts.InstdAgt.FinInstnId.BICFI = receiverBic
+
 	return m
 }

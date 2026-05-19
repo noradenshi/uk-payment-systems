@@ -6,10 +6,6 @@ services:
       POSTGRES_USER: chaps_admin
       POSTGRES_PASSWORD: password123
       POSTGRES_DB: chaps_ledger
-    command: >
-      -c io_method=worker
-      -c io_workers=4
-      -c track_io_timing=on
     ports:
       - "5432:5432"
     volumes:
