@@ -1,0 +1,16 @@
+services:
+  db:
+    image: postgres:18-alpine
+    container_name: fps_db_dev
+    environment:
+      POSTGRES_USER: fps_admin
+      POSTGRES_PASSWORD: password123
+      POSTGRES_DB: fps_ledger
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./internal/db:/docker-entrypoint-initdb.d:ro
+      - postgres_data:/var/lib/postgresql
+
+volumes:
+  postgres_data:

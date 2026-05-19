@@ -1,0 +1,33 @@
+services:
+  db:
+    image: postgres:18-alpine
+    container_name: fps_db
+    environment:
+      POSTGRES_USER: fps_admin
+      POSTGRES_PASSWORD: password123
+      POSTGRES_DB: fps_ledger
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./internal/db:/docker-entrypoint-initdb.d:ro
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fps_admin -d fps_ledger"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    container_name: fps_server
+    platform: linux/amd64
+    ports:
+      - "8081:8081"
+    environment:
+      DATABASE_URL: "postgres://fps_admin:password123@db:5432/fps_ledger"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
