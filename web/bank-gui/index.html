@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>UKPS Bank GUI</title>
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; background: #f5f7fb; color: #172033; }
+    header, main { max-width: 1180px; margin: 0 auto; padding: 20px; }
+    header { display: flex; gap: 16px; justify-content: space-between; align-items: end; }
+    h1 { margin: 0; font-size: 28px; }
+    label { display: grid; gap: 6px; font-size: 13px; color: #46536a; }
+    input, select, button { border: 1px solid #cfd7e6; border-radius: 6px; padding: 10px 12px; font: inherit; background: white; }
+    button { cursor: pointer; background: #123c69; color: white; border-color: #123c69; }
+    .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .panel { background: white; border: 1px solid #dde4ef; border-radius: 8px; padding: 16px; min-height: 120px; }
+    .wide { grid-column: span 3; }
+    .metric { font-size: 26px; font-weight: 700; margin-top: 8px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; border-bottom: 1px solid #e7edf6; padding: 9px; }
+    .alert { display: none; position: fixed; inset: 20px 20px auto auto; max-width: 360px; background: #b42318; color: white; border-radius: 8px; padding: 16px; box-shadow: 0 16px 40px #0003; }
+    .alert.show { display: block; }
+    @media (max-width: 800px) { header { display: block; } .grid { grid-template-columns: 1fr; } .wide { grid-column: auto; } }
+  </style>
+</head>
+<body>
+  <div id="alert" class="alert"></div>
+  <header>
+    <div>
+      <p>Panel pracownika banku</p>
+      <h1>UK Payment Systems</h1>
+    </div>
+    <div class="controls">
+      <label>System
+        <select id="system">
+          <option value="http://localhost:8081">FPS</option>
+          <option value="http://localhost:8080">CHAPS</option>
+          <option value="http://localhost:8082">BACS</option>
+        </select>
+      </label>
+      <label>BIC banku <input id="bic" value="BARCGB2L" /></label>
+      <button id="refresh">Odśwież</button>
+    </div>
+  </header>
+  <main class="grid">
+    <section class="panel"><strong>Saldo rozliczeniowe</strong><div id="balance" class="metric">-</div></section>
+    <section class="panel"><strong>Limit zadłużenia</strong><div id="limit" class="metric">-</div></section>
+    <section class="panel"><strong>Dostępna płynność</strong><div id="available" class="metric">-</div></section>
+    <section class="panel wide">
+      <h2>Przelewy / zlecenia</h2>
+      <table><thead><tr><th>ID</th><th>Nadawca</th><th>Odbiorca</th><th>Kwota</th><th>Status</th></tr></thead><tbody id="payments"></tbody></table>
+    </section>
+    <section class="panel wide">
+      <h2>Raport sesji / netting</h2>
+      <div class="controls"><label>Data sesji <input id="cycleDate" type="date" /></label><button id="netting">Pobierz raport</button></div>
+      <table><thead><tr><th>Dłużnik</th><th>Wierzyciel</th><th>Brutto</th><th>Netto</th></tr></thead><tbody id="nettingRows"></tbody></table>
+    </section>
+  </main>
+  <script>
+    const money = new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP", maximumFractionDigits: 0 });
+    const $ = (id) => document.getElementById(id);
+    $("cycleDate").valueAsDate = new Date();
+    function pathForPayments(base) {
+      if (base.endsWith("8080")) return "/v1/payments/chaps?limit=100";
+      if (base.endsWith("8081")) return "/v1/payments/fps?limit=100";
+      return "/v1/payments/bacs/submit";
+    }
+    async function getJSON(url) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+    async function refresh() {
+      const base = $("system").value;
+      const bic = $("bic").value.toUpperCase();
+      const participants = await getJSON(base + "/v1/participants");
+      const me = participants.find((p) => p.bic === bic) || {};
+      const balance = Number(me.balance || 0);
+      const limit = Number(me.overdraft_limit || 0);
+      $("balance").textContent = money.format(balance);
+      $("limit").textContent = money.format(limit);
+      $("available").textContent = money.format(balance + limit);
+      const alert = $("alert");
+      if (balance < -limit) {
+        alert.textContent = `Przekroczono limit zadłużenia banku ${bic}. Wymagane zasilenie rachunku rozliczeniowego.`;
+        alert.classList.add("show");
+      } else {
+        alert.classList.remove("show");
+      }
+      const payments = await getJSON(base + pathForPayments(base)).catch(() => []);
+      $("payments").innerHTML = payments
+        .filter((p) => !p.sender_bic || p.sender_bic === bic || p.receiver_bic === bic || p.su_bic === bic)
+        .map((p) => `<tr><td>${p.msg_id || p.id}</td><td>${p.sender_bic || p.su_bic || ""}</td><td>${p.receiver_bic || ""}</td><td>${money.format(Number(p.amount || p.total_value || 0))}</td><td>${p.status}</td></tr>`)
+        .join("");
+    }
+    async function loadNetting() {
+      const base = $("system").value;
+      if (!base.endsWith("8082")) {
+        $("nettingRows").innerHTML = "<tr><td colspan='4'>Netting sesyjny jest dostępny w BACS.</td></tr>";
+        return;
+      }
+      const report = await getJSON(`${base}/v1/payments/bacs/reports/${$("cycleDate").value}/netting/${$("bic").value.toUpperCase()}`);
+      $("nettingRows").innerHTML = report.bilateral.map((r) => `<tr><td>${r.debtor_bic}</td><td>${r.creditor_bic}</td><td>${money.format(r.gross_amount)}</td><td>${money.format(r.net_amount)}</td></tr>`).join("");
+    }
+    $("refresh").onclick = refresh;
+    $("netting").onclick = loadNetting;
+    refresh().catch((e) => $("alert").textContent = e.message);
+  </script>
+</body>
+</html>

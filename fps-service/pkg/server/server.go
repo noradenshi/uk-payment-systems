@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -24,6 +25,7 @@ type Server struct {
 var reBIC = regexp.MustCompile(`^[A-Z0-9]{8,11}$`)
 
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("OPTIONS /", handleOptions)
 	mux.HandleFunc("POST /v1/participants/register", s.handleRegister)
 	mux.HandleFunc("GET /v1/participants", s.handleListParticipants)
 	mux.HandleFunc("PATCH /v1/participants/{bic}/status", s.handleUpdateParticipantStatus)
@@ -37,6 +39,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/payments/fps/validate", s.handleValidatePayment)
 	mux.HandleFunc("GET /v1/payments/fps/limits", s.handleGetLimits)
 	mux.HandleFunc("PATCH /v1/payments/fps/limits/{bic}", s.handleUpdateLimit)
+	mux.HandleFunc("POST /v1/payments/fps/gridlock/resolve", s.handleResolveGridlock)
 	mux.HandleFunc("GET /v1/payments/fps/{id}", s.GetPayment)
 	mux.HandleFunc("DELETE /v1/payments/fps/{id}", s.handleCancelPayment)
 
@@ -68,6 +71,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload interface{}) {
+	setCORS(w)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if payload != nil {
@@ -85,6 +89,37 @@ func notImplemented(w http.ResponseWriter) {
 
 func validateBIC(bic string) bool {
 	return reBIC.MatchString(bic)
+}
+
+func setCORS(w http.ResponseWriter) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Idempotency-Key,X-Digital-Signature")
+}
+
+func handleOptions(w http.ResponseWriter, r *http.Request) {
+	setCORS(w)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func loadGlobalSchedule(system string) map[string]interface{} {
+	paths := []string{os.Getenv("UKPS_CONFIG_PATH"), "config/sessions.json", "../config/sessions.json", "../../config/sessions.json"}
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var cfg map[string]map[string]interface{}
+		if err := json.Unmarshal(data, &cfg); err == nil {
+			if entry, ok := cfg[system]; ok {
+				return entry
+			}
+		}
+	}
+	return map[string]interface{}{}
 }
 
 func (s *Server) GetPayment(w http.ResponseWriter, r *http.Request) {
@@ -526,15 +561,32 @@ func (s *Server) handleUpdateLimit(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		SinglePaymentLimit    *float64 `json:"single_payment_limit"`
 		DailyParticipantLimit *float64 `json:"daily_participant_limit"`
+		OverdraftLimit        *float64 `json:"overdraft_limit"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		badRequest(w, "Invalid request body")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{
-		"bic":    bic,
-		"status": "LIMITS_UPDATED",
-	})
+	if req.OverdraftLimit == nil || *req.OverdraftLimit < 0 {
+		badRequest(w, "overdraft_limit must be a non-negative number")
+		return
+	}
+	if err := s.Ledger.UpdateOverdraftLimit(r.Context(), bic, *req.OverdraftLimit); err != nil {
+		log.Printf("Failed to update overdraft limit for %s: %v", bic, err)
+		http.Error(w, "Failed to update limit", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"bic": bic, "status": "LIMITS_UPDATED", "overdraft_limit": *req.OverdraftLimit})
+}
+
+func (s *Server) handleResolveGridlock(w http.ResponseWriter, r *http.Request) {
+	settled, err := s.Ledger.ResolveGridlock(r.Context())
+	if err != nil {
+		log.Printf("Gridlock resolution failed: %v", err)
+		http.Error(w, "Gridlock resolution failed", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "COMPLETED", "settled": settled})
 }
 
 func (s *Server) handleCancelPayment(w http.ResponseWriter, r *http.Request) {
@@ -813,12 +865,32 @@ func (s *Server) handleGetPrefunded(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSystemSchedule(w http.ResponseWriter, r *http.Request) {
+	cfg := loadGlobalSchedule("fps")
+	opening, _ := cfg["opening_time"].(string)
+	closing, _ := cfg["closing_time"].(string)
+	settlementTimes, ok := cfg["settlement_times"].([]interface{})
+	if opening == "" {
+		opening = "00:00"
+	}
+	if closing == "" {
+		closing = "23:59"
+	}
+	times := []string{"03:00", "09:00", "12:00", "15:00", "18:00", "21:00"}
+	if ok && len(settlementTimes) > 0 {
+		times = []string{}
+		for _, item := range settlementTimes {
+			if value, ok := item.(string); ok {
+				times = append(times, value)
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"date":             time.Now().Format("2006-01-02"),
-		"opening_time":     "00:00",
-		"closing_time":     "23:59",
-		"settlement_times": []string{"03:00", "09:00", "12:00", "15:00", "18:00", "21:00"},
+		"opening_time":     opening,
+		"closing_time":     closing,
+		"settlement_times": times,
 		"timezone":         "Europe/London",
+		"demo_session_minutes": cfg["demo_session_minutes"],
 	})
 }
 

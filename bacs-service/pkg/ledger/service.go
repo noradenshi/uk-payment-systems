@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -43,7 +43,7 @@ func (s *LedgerService) ListParticipants(ctx context.Context) ([]map[string]inte
 	rows, err := s.Pool.Query(ctx, `
 		SELECT p.bic_code, p.name, p.su_code, p.is_service_user, p.is_destination_user,
 		       COALESCE(st.status::text,'ACTIVE'), COALESCE(l.balance,0), p.currency,
-		       COALESCE(st.is_closed,false), st.block_reason
+		       COALESCE(st.is_closed,false), st.block_reason, COALESCE(st.overdraft_limit,0)
 		FROM participant_profiles p
 		LEFT JOIN participant_statuses st ON st.bic_code = p.bic_code
 		LEFT JOIN participant_liquidity l ON l.bic_code = p.bic_code
@@ -59,7 +59,8 @@ func (s *LedgerService) ListParticipants(ctx context.Context) ([]map[string]inte
 		var suCode, blockReason *string
 		var isSU, isDSU, isClosed bool
 		var balance float64
-		if err := rows.Scan(&bic, &name, &suCode, &isSU, &isDSU, &status, &balance, &currency, &isClosed, &blockReason); err != nil {
+		var overdraftLimit float64
+		if err := rows.Scan(&bic, &name, &suCode, &isSU, &isDSU, &status, &balance, &currency, &isClosed, &blockReason, &overdraftLimit); err != nil {
 			return nil, err
 		}
 		entry := map[string]interface{}{
@@ -71,6 +72,7 @@ func (s *LedgerService) ListParticipants(ctx context.Context) ([]map[string]inte
 			"is_closed":          isClosed,
 			"is_service_user":    isSU,
 			"is_destination_user": isDSU,
+			"overdraft_limit":    overdraftLimit,
 		}
 		if suCode != nil {
 			entry["su_code"] = *suCode
@@ -191,10 +193,56 @@ func (s *LedgerService) SettleCycle(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		if _, err = tx.Exec(ctx, `DELETE FROM bacs_bilateral_positions WHERE cycle_id = $1`, cycleID); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, `DELETE FROM bacs_net_positions WHERE cycle_id = $1`, cycleID); err != nil {
+			return err
+		}
+
+		_, err = tx.Exec(ctx, `
+			INSERT INTO bacs_bilateral_positions (cycle_id, debtor_bic, creditor_bic, gross_amount, net_amount)
+			WITH gross AS (
+				SELECT t.debtor_bic, t.creditor_bic, SUM(t.amount) AS amount
+				FROM bacs_transactions t
+				JOIN bacs_submissions s ON s.id = t.submission_id
+				WHERE s.cycle_id = $1 AND s.status = 'ACCEPTED'
+				  AND t.debtor_bic IS NOT NULL AND t.creditor_bic IS NOT NULL
+				GROUP BY t.debtor_bic, t.creditor_bic
+			),
+			netted AS (
+				SELECT g.debtor_bic, g.creditor_bic, g.amount AS gross_amount,
+					   GREATEST(g.amount - COALESCE(r.amount, 0), 0) AS net_amount
+				FROM gross g
+				LEFT JOIN gross r ON r.debtor_bic = g.creditor_bic AND r.creditor_bic = g.debtor_bic
+			)
+			SELECT $1, debtor_bic, creditor_bic, gross_amount, net_amount
+			FROM netted
+			WHERE net_amount > 0`, cycleID)
+		if err != nil {
+			return err
+		}
+
 		rows, err := tx.Query(ctx, `
-			SELECT su_bic, SUM(total_value)
-			FROM bacs_submissions WHERE cycle_id = $1 AND status = 'ACCEPTED'
-			GROUP BY su_bic`, cycleID)
+			SELECT p.bic_code,
+			       COALESCE(n.net_position, 0) AS net_position,
+			       COALESCE(l.balance, 0),
+			       COALESCE(st.overdraft_limit, 0)
+			FROM participant_profiles p
+			LEFT JOIN (
+				SELECT bic_code, SUM(amount) AS net_position
+				FROM (
+					SELECT creditor_bic AS bic_code, net_amount AS amount
+					FROM bacs_bilateral_positions WHERE cycle_id = $1
+					UNION ALL
+					SELECT debtor_bic AS bic_code, -net_amount AS amount
+					FROM bacs_bilateral_positions WHERE cycle_id = $1
+				) x
+				GROUP BY bic_code
+			) n ON n.bic_code = p.bic_code
+			LEFT JOIN participant_liquidity l ON l.bic_code = p.bic_code
+			LEFT JOIN participant_statuses st ON st.bic_code = p.bic_code
+			ORDER BY p.bic_code`, cycleID)
 		if err != nil {
 			return err
 		}
@@ -202,22 +250,31 @@ func (s *LedgerService) SettleCycle(ctx context.Context) error {
 
 		for rows.Next() {
 			var bic string
-			var netAmount float64
-			if err := rows.Scan(&bic, &netAmount); err != nil {
+			var netAmount, balance, overdraftLimit float64
+			if err := rows.Scan(&bic, &netAmount, &balance, &overdraftLimit); err != nil {
 				return err
 			}
-			var balance float64
-			err := tx.QueryRow(ctx, `SELECT balance FROM participant_liquidity WHERE bic_code = $1 FOR UPDATE`, bic).Scan(&balance)
-			if err != nil {
-				log.Printf("SettleCycle: participant %s not found, skipping", bic)
-				continue
+			status := "SETTLED"
+			if balance+netAmount < -overdraftLimit {
+				status = "BLOCKED"
+				if _, err = tx.Exec(ctx, `
+					UPDATE participant_statuses
+					SET status='SUSPENDED', block_reason='BACS_SESSION_LIQUIDITY_SHORTFALL',
+					    blocked_at=NOW(), liquidity_breach_at=COALESCE(liquidity_breach_at, NOW()), updated_at=NOW()
+					WHERE bic_code=$1`, bic); err != nil {
+					return err
+				}
+			} else {
+				if _, err = tx.Exec(ctx, `UPDATE participant_liquidity SET balance = balance + $1, updated_at = NOW() WHERE bic_code = $2`, netAmount, bic); err != nil {
+					return err
+				}
+				if _, err = tx.Exec(ctx, `INSERT INTO bacs_journal_entries (submission_id, account_bic, amount) VALUES (NULL, $1, $2)`, bic, netAmount); err != nil {
+					return err
+				}
 			}
-			_, err = tx.Exec(ctx, `UPDATE participant_liquidity SET balance = balance + $1, updated_at = NOW() WHERE bic_code = $2`, netAmount, bic)
-			if err != nil {
-				return err
-			}
-			_, err = tx.Exec(ctx, `INSERT INTO bacs_journal_entries (submission_id, account_bic, amount) VALUES (NULL, $1, $2)`, bic, netAmount)
-			if err != nil {
+			if _, err = tx.Exec(ctx, `
+				INSERT INTO bacs_net_positions (cycle_id, bic_code, net_position, balance_before, overdraft_limit, status)
+				VALUES ($1,$2,$3,$4,$5,$6)`, cycleID, bic, netAmount, balance, overdraftLimit, status); err != nil {
 				return err
 			}
 		}
@@ -352,22 +409,28 @@ func (s *LedgerService) RecallSubmission(ctx context.Context, id string) error {
 
 func (s *LedgerService) StoreTransactions(ctx context.Context, submissionID string, debits []map[string]interface{}, credits []map[string]interface{}) error {
 	return pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+		var suBic string
+		if err := tx.QueryRow(ctx, `SELECT su_bic FROM bacs_submissions WHERE id = $1`, submissionID).Scan(&suBic); err != nil {
+			return err
+		}
 		for _, d := range debits {
+			destBic := inferDestinationBIC(fmt.Sprint(d["dest_sort_code"]), suBic)
 			_, err := tx.Exec(ctx, `
-				INSERT INTO bacs_transactions (submission_id, record_type, volume_header_no, dest_sort_code, dest_account, amount, originator_ref, reference, su_code, status)
-				VALUES ($1, 'DIRECT_DEBIT', $2, $3, $4, $5, $6, $7, $8, 'PENDING')`,
+				INSERT INTO bacs_transactions (submission_id, record_type, volume_header_no, dest_sort_code, dest_account, debtor_bic, creditor_bic, amount, originator_ref, reference, su_code, status)
+				VALUES ($1, 'DIRECT_DEBIT', $2, $3, $4, $5, $6, $7, $8, $9, $10, 'PENDING')`,
 				submissionID, d["volume_header_no"], d["dest_sort_code"], d["dest_account"],
-				d["amount"], d["originator_ref"], d["reference"], d["su_code"])
+				destBic, suBic, d["amount"], d["originator_ref"], d["reference"], d["su_code"])
 			if err != nil {
 				return err
 			}
 		}
 		for _, c := range credits {
+			destBic := inferDestinationBIC(fmt.Sprint(c["dest_sort_code"]), suBic)
 			_, err := tx.Exec(ctx, `
-				INSERT INTO bacs_transactions (submission_id, record_type, volume_header_no, dest_sort_code, dest_account, amount, originator_ref, reference, su_code, status)
-				VALUES ($1, 'DIRECT_CREDIT', $2, $3, $4, $5, $6, $7, $8, 'PENDING')`,
+				INSERT INTO bacs_transactions (submission_id, record_type, volume_header_no, dest_sort_code, dest_account, debtor_bic, creditor_bic, amount, originator_ref, reference, su_code, status)
+				VALUES ($1, 'DIRECT_CREDIT', $2, $3, $4, $5, $6, $7, $8, $9, $10, 'PENDING')`,
 				submissionID, c["volume_header_no"], c["dest_sort_code"], c["dest_account"],
-				c["amount"], c["originator_ref"], c["reference"], c["su_code"])
+				suBic, destBic, c["amount"], c["originator_ref"], c["reference"], c["su_code"])
 			if err != nil {
 				return err
 			}
@@ -375,6 +438,25 @@ func (s *LedgerService) StoreTransactions(ctx context.Context, submissionID stri
 		_, err := tx.Exec(ctx, `UPDATE bacs_submissions SET status = 'ACCEPTED' WHERE id = $1`, submissionID)
 		return err
 	})
+}
+
+func inferDestinationBIC(sortCode string, fallback string) string {
+	compact := strings.ReplaceAll(sortCode, "-", "")
+	if len(compact) >= 6 {
+		compact = compact[:6]
+	}
+	switch compact {
+	case "200415", "200000", "202015":
+		return "BARCGB2L"
+	case "400515", "400000", "401515":
+		return "HSBCGB44"
+	case "309634", "300000", "309000":
+		return "LLOYGB21"
+	case "609104", "600000", "609000":
+		return "SNDRUK22"
+	default:
+		return fallback
+	}
 }
 
 func (s *LedgerService) GetTransactions(ctx context.Context, submissionID string) ([]map[string]interface{}, error) {
@@ -559,6 +641,22 @@ func (s *LedgerService) ClaimMandate(ctx context.Context, ref, sortCode, account
 	return nil
 }
 
+func (s *LedgerService) TopUpLiquidity(ctx context.Context, bic string, amount float64) error {
+	_, err := s.Pool.Exec(ctx, `
+		UPDATE participant_liquidity
+		SET balance = balance + $1, updated_at = NOW()
+		WHERE bic_code = $2`, amount, bic)
+	if err != nil {
+		return err
+	}
+	_, _ = s.Pool.Exec(ctx, `
+		UPDATE participant_statuses st
+		SET liquidity_breach_at = NULL, updated_at = NOW()
+		FROM participant_liquidity l
+		WHERE l.bic_code = st.bic_code AND st.bic_code = $1 AND l.balance >= -st.overdraft_limit`, bic)
+	return nil
+}
+
 // ── Return (ARUDD) management ──
 
 func (s *LedgerService) CreateReturn(ctx context.Context, origTransID int, reasonCode string, amount float64) (int, error) {
@@ -670,6 +768,77 @@ func (s *LedgerService) GetCycleSummary(ctx context.Context, cycleDate string) (
 	}, nil
 }
 
+func (s *LedgerService) GetNettingReport(ctx context.Context, cycleDate, bic string) (map[string]interface{}, error) {
+	var cycleID int
+	var status string
+	err := s.Pool.QueryRow(ctx, `SELECT id, status::text FROM bacs_cycles WHERE input_date = $1 ORDER BY created_at DESC LIMIT 1`, cycleDate).Scan(&cycleID, &status)
+	if err != nil {
+		return nil, err
+	}
+
+	bilateralQuery := `SELECT debtor_bic, creditor_bic, gross_amount, net_amount FROM bacs_bilateral_positions WHERE cycle_id = $1`
+	args := []interface{}{cycleID}
+	if bic != "" {
+		bilateralQuery += ` AND (debtor_bic = $2 OR creditor_bic = $2)`
+		args = append(args, bic)
+	}
+	bilateralQuery += ` ORDER BY debtor_bic, creditor_bic`
+	rows, err := s.Pool.Query(ctx, bilateralQuery, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	bilateral := []map[string]interface{}{}
+	for rows.Next() {
+		var debtor, creditor string
+		var gross, net float64
+		if err := rows.Scan(&debtor, &creditor, &gross, &net); err != nil {
+			return nil, err
+		}
+		bilateral = append(bilateral, map[string]interface{}{
+			"debtor_bic":   debtor,
+			"creditor_bic": creditor,
+			"gross_amount": gross,
+			"net_amount":   net,
+		})
+	}
+
+	netQuery := `SELECT bic_code, net_position, balance_before, overdraft_limit, status FROM bacs_net_positions WHERE cycle_id = $1`
+	netArgs := []interface{}{cycleID}
+	if bic != "" {
+		netQuery += ` AND bic_code = $2`
+		netArgs = append(netArgs, bic)
+	}
+	netQuery += ` ORDER BY bic_code`
+	netRows, err := s.Pool.Query(ctx, netQuery, netArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer netRows.Close()
+	netPositions := []map[string]interface{}{}
+	for netRows.Next() {
+		var bank, posStatus string
+		var position, balanceBefore, overdraftLimit float64
+		if err := netRows.Scan(&bank, &position, &balanceBefore, &overdraftLimit, &posStatus); err != nil {
+			return nil, err
+		}
+		netPositions = append(netPositions, map[string]interface{}{
+			"bic":             bank,
+			"net_position":    position,
+			"balance_before":  balanceBefore,
+			"overdraft_limit": overdraftLimit,
+			"status":          posStatus,
+		})
+	}
+	return map[string]interface{}{
+		"cycle_id":      cycleID,
+		"cycle_date":    cycleDate,
+		"cycle_status":  status,
+		"bilateral":     bilateral,
+		"net_positions": netPositions,
+	}, nil
+}
+
 // ── Limits ──
 
 func (s *LedgerService) GetBACSLimits(ctx context.Context) (map[string]interface{}, error) {
@@ -683,6 +852,14 @@ func (s *LedgerService) GetBACSLimits(ctx context.Context) (map[string]interface
 		"settlement_cycle":           "T+2",
 		"currency":                   "GBP",
 	}, nil
+}
+
+func (s *LedgerService) UpdateOverdraftLimit(ctx context.Context, bic string, limit float64) error {
+	_, err := s.Pool.Exec(ctx, `
+		UPDATE participant_statuses
+		SET overdraft_limit=$1, updated_at=NOW()
+		WHERE bic_code=$2`, limit, bic)
+	return err
 }
 
 // ── Schedule ──

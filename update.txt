@@ -1,0 +1,42 @@
+Aktualnie projekt wygląda tak względem wymagań na 3.0:
+Spełnione
+Trzy systemy rozliczeniowe są wydzielone jako osobne backendy:CHAPS :8080
+FPS :8081
+BACS :8082
+
+Osobna aplikacja banku centralnego działa jako central-bank-service, port 8090.
+Wszystkie kontenery teraz działają: chaps_server, fps_server, bacs_server, central_bank_server i trzy bazy są Up.
+API bankowe jest bliskie realnym odpowiednikom:CHAPS: ISO 20022 XML pacs.008 / pacs.002 + JSON.
+FPS: ISO 20022 + ISO 8583 binary + JSON.
+BACS: Standard 18 upload.
+
+BACS ma sesje/cykle i przyjmowanie paczek do aktualnej sesji.
+BACS ma teraz wielostronny/bilateralny netting:tabela bacs_bilateral_positions
+tabela bacs_net_positions
+endpointy raportu nettingu: /v1/payments/bacs/reports/{cycleDate}/netting.
+
+Jest raport końcowy sesji dla BACS: bilateralnie „kto komu ile” plus pozycje netto.
+CHAPS/FPS mają kolejkę transakcji przy braku płynności.
+CHAPS/FPS mają gridlock resolution:/v1/payments/chaps/gridlock/resolve
+/v1/payments/fps/gridlock/resolve
+
+Banki mają indywidualny overdraft_limit.
+Jest mechanizm automatycznej blokady po przekroczeniu limitu przez 2 h w CHAPS/FPS.
+Jest możliwość zasilenia rachunku banku:bezpośrednio przez /v1/liquidity/top-up
+przez osobny bank centralny /v1/central-bank/top-up.
+
+Jest globalna konfiguracja sesji w sessions.json, z demo_session_minutes.
+Jest lekkie GUI operatora: operator-gui.
+Jest lekkie GUI pracownika banku: bank-gui.
+GUI operatora pokazuje uczestników, salda, limity, status, emergency, transakcje, blokowanie/odblokowanie, zasilenie z banku centralnego i gridlock.
+GUI banku pokazuje saldo, limit, dostępną płynność, transakcje i raport sesji/nettingu dla BACS.
+Częściowo
+Dynamiczny czas sesji jest w globalnym configu i endpointy go pokazują, ale nie ma jeszcze automatycznego schedulera, który sam zamyka sesje co 15 minut. Operator dalej może zamknąć cykl endpointem.
+Gridlock resolution jest pragmatyczny: próbuje po kolei rozliczać zakolejkowane płatności, gdy mieszczą się w limicie. To działa demonstracyjnie, ale nie jest pełnym optymalizatorem kombinatorycznym.
+Automatyczna blokada po 2 h odpala się przy wywołaniach listowania uczestników / operacjach serwisu, nie jako osobny background worker tykający co minutę.
+GUI jest lekkie i demonstracyjne, bez logowania/ról.
+Nie dotyczy 3.0 / nadal brak na 4.0
+Nie ma jeszcze archiwizacji dwuwarstwowej operational DB + data lake.
+Nie ma wyszukiwarki archiwum po nadawcy/odbiorcy/zakresie dat dla starych transakcji.
+Nie ma procesu przenoszenia transakcji starszych niż miesiąc do archiwum.
+Czyli: na wymagania 3.0 projekt jest teraz zasadniczo pokryty, z kilkoma uproszczeniami implementacyjnymi, które da się uczciwie opisać jako symulacyjne. Wymagania 4.0 dotyczące data lake nadal nie są zrobione.

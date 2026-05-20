@@ -21,6 +21,8 @@ CREATE TABLE participant_statuses (
     bic_code VARCHAR(11) PRIMARY KEY REFERENCES participant_profiles(bic_code) ON DELETE RESTRICT,
     status participant_status DEFAULT 'ACTIVE',
     is_closed BOOLEAN DEFAULT FALSE,
+    overdraft_limit DECIMAL(20, 2) NOT NULL DEFAULT 30000000.00,
+    liquidity_breach_at TIMESTAMP WITH TIME ZONE,
     blocked_at TIMESTAMP WITH TIME ZONE,
     block_reason TEXT,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -57,12 +59,37 @@ CREATE TABLE bacs_transactions (
     volume_header_no INT NOT NULL DEFAULT 1,
     dest_sort_code VARCHAR(9) NOT NULL,
     dest_account VARCHAR(9) NOT NULL,
+    debtor_bic VARCHAR(11) REFERENCES participant_profiles(bic_code) ON DELETE RESTRICT,
+    creditor_bic VARCHAR(11) REFERENCES participant_profiles(bic_code) ON DELETE RESTRICT,
     amount DECIMAL(20, 2) NOT NULL,
     originator_ref VARCHAR(15),
     reference VARCHAR(14),
     su_code VARCHAR(13),
     status VARCHAR(20) DEFAULT 'PENDING',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE TABLE bacs_bilateral_positions (
+    id SERIAL PRIMARY KEY,
+    cycle_id INT REFERENCES bacs_cycles(id) ON DELETE RESTRICT,
+    debtor_bic VARCHAR(11) REFERENCES participant_profiles(bic_code) ON DELETE RESTRICT,
+    creditor_bic VARCHAR(11) REFERENCES participant_profiles(bic_code) ON DELETE RESTRICT,
+    gross_amount DECIMAL(20, 2) NOT NULL,
+    net_amount DECIMAL(20, 2) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE (cycle_id, debtor_bic, creditor_bic)
+);
+
+CREATE TABLE bacs_net_positions (
+    id SERIAL PRIMARY KEY,
+    cycle_id INT REFERENCES bacs_cycles(id) ON DELETE RESTRICT,
+    bic_code VARCHAR(11) REFERENCES participant_profiles(bic_code) ON DELETE RESTRICT,
+    net_position DECIMAL(20, 2) NOT NULL,
+    balance_before DECIMAL(20, 2) NOT NULL,
+    overdraft_limit DECIMAL(20, 2) NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE (cycle_id, bic_code)
 );
 
 CREATE TABLE bacs_mandates (
@@ -97,4 +124,7 @@ CREATE TABLE bacs_journal_entries (
 CREATE INDEX idx_bacs_submissions_su ON bacs_submissions(su_bic);
 CREATE INDEX idx_bacs_submissions_cycle ON bacs_submissions(cycle_id);
 CREATE INDEX idx_bacs_transactions_submission ON bacs_transactions(submission_id);
+CREATE INDEX idx_bacs_transactions_bilateral ON bacs_transactions(debtor_bic, creditor_bic);
+CREATE INDEX idx_bacs_bilateral_cycle ON bacs_bilateral_positions(cycle_id);
+CREATE INDEX idx_bacs_net_positions_cycle ON bacs_net_positions(cycle_id);
 CREATE INDEX idx_bacs_mandates_su ON bacs_mandates(su_bic);
