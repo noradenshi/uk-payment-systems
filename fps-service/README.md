@@ -29,72 +29,72 @@ FPS (Faster Payments Service) processes near-real-time low-value payments 24/7. 
 
 | Method | Endpoint | Description | Status |
 | :--- | :--- | :--- | :--- |
-| **POST** | `/v1/payments/fps` | Initiate a SIP. Accepts ISO 20022 XML, ISO 8583 binary, or JSON. | Design |
-| **POST** | `/v1/payments/fps/validate` | Dry-run validation: BIC, status, liquidity, format compliance. | Design |
-| **GET** | `/v1/payments/fps/{id}` | Retrieve settlement status, ISO 20022/8583 details, and audit trail. | Design |
-| **GET** | `/v1/payments/fps` | List/filter FPS payments by status, date range, participant, limit. | Design |
-| **DELETE** | `/v1/payments/fps/{id}` | Recall a payment (only if not yet settled). | Design |
+| **POST** | `/v1/payments/fps` | Initiate a SIP. Accepts ISO 20022 XML, ISO 8583 binary, or JSON. | Done |
+| **POST** | `/v1/payments/fps/validate` | Dry-run validation: BIC, status, liquidity, format compliance. | Done |
+| **GET** | `/v1/payments/fps/{id}` | Retrieve settlement status, ISO 20022/8583 details, and audit trail. | Done |
+| **GET** | `/v1/payments/fps` | List/filter FPS payments by status, date range, participant, limit. | Done |
+| **DELETE** | `/v1/payments/fps/{id}` | Recall a payment (only if not yet settled). | Done |
 
 ### Payments — Forward Dated
 
 | Method | Endpoint | Description | Status |
 | :--- | :--- | :--- | :--- |
-| **POST** | `/v1/payments/fps/forward-dated` | Schedule a future-dated payment. | Design |
-| **GET** | `/v1/payments/fps/forward-dated` | List scheduled forward-dated payments. | Design |
-| **DELETE** | `/v1/payments/fps/forward-dated/{id}` | Cancel a scheduled forward-dated payment before execution. | Design |
+| **POST** | `/v1/payments/fps/forward-dated` | Schedule a future-dated payment. | Done |
+| **GET** | `/v1/payments/fps/forward-dated` | List scheduled forward-dated payments. | Done |
+| **DELETE** | `/v1/payments/fps/forward-dated/{id}` | Cancel a scheduled forward-dated payment before execution. | Done |
 
 ### Payments — Standing Orders
 
 | Method | Endpoint | Description | Status |
 | :--- | :--- | :--- | :--- |
-| **POST** | `/v1/payments/fps/standing-orders` | Create a recurring standing order. | Design |
-| **GET** | `/v1/payments/fps/standing-orders` | List standing orders for a participant. | Design |
-| **GET** | `/v1/payments/fps/standing-orders/{id}` | Get standing order details and execution history. | Design |
-| **PATCH** | `/v1/payments/fps/standing-orders/{id}` | Amend amount/frequency/end-date of a standing order. | Design |
-| **DELETE** | `/v1/payments/fps/standing-orders/{id}` | Cancel a standing order. | Design |
+| **POST** | `/v1/payments/fps/standing-orders` | Create a recurring standing order. | Done |
+| **GET** | `/v1/payments/fps/standing-orders` | List standing orders for a participant. | Done |
+| **GET** | `/v1/payments/fps/standing-orders/{id}` | Get standing order details and execution history. | Done |
+| **PATCH** | `/v1/payments/fps/standing-orders/{id}` | Amend amount/frequency/end-date of a standing order. | Done |
+| **DELETE** | `/v1/payments/fps/standing-orders/{id}` | Cancel a standing order. | Done |
 
 ### Payments — Bulk
 
 | Method | Endpoint | Description | Status |
 | :--- | :--- | :--- | :--- |
-| **POST** | `/v1/payments/fps/bulk` | Submit a bulk payment file (ISO 20022 XML or Standard 18-like CSV). | Design |
-| **GET** | `/v1/payments/fps/bulk/{id}` | Get bulk submission status and per-item breakdown. | Design |
-| **GET** | `/v1/payments/fps/bulk` | List bulk submissions. | Design |
+| **POST** | `/v1/payments/fps/bulk` | Submit a bulk payment file (ISO 20022 XML or Standard 18-like CSV). | Done |
+| **GET** | `/v1/payments/fps/bulk/{id}` | Get bulk submission status and per-item breakdown. | Done |
+| **GET** | `/v1/payments/fps/bulk` | List bulk submissions. | Done |
 
 ### Participant Management
 
 | Method | Endpoint | Description | Status |
 | :--- | :--- | :--- | :--- |
-| **GET** | `/v1/participants` | List participants. | Design |
-| **POST** | `/v1/participants/register` | Onboard a participant with BIC, name, settlement type (DIRECT/INDIRECT), sponsor BIC. | Design |
-| **PATCH** | `/v1/participants/{bic}/status` | Update status (ACTIVE/SUSPENDED/DISABLED). | Design |
-| **POST** | `/v1/participants/{bic}/block` | Kill-switch block. | Design |
-| **GET** | `/v1/participants/{bic}/block` | Block details. | Design |
-| **DELETE** | `/v1/participants/{bic}/block` | Unblock. | Design |
-| **GET** | `/v1/participants/{bic}/positions` | Real-time position (prefunded balance + DNS net position). | Design |
+| **GET** | `/v1/participants` | List participants. | Done |
+| **POST** | `/v1/participants/register` | Onboard a participant with BIC, name, settlement type (DIRECT/INDIRECT), sponsor BIC. | Done |
+| **PATCH** | `/v1/participants/{bic}/status` | Update status (ACTIVE/SUSPENDED/DISABLED). | Done |
+| **POST** | `/v1/participants/{bic}/block` | Kill-switch block. | Done |
+| **GET** | `/v1/participants/{bic}/block` | Block details. | Done |
+| **DELETE** | `/v1/participants/{bic}/block` | Unblock. | Done |
+| **GET** | `/v1/participants/{bic}/positions` | Real-time position (prefunded balance + DNS net position). | Done |
 
 ### Settlement & Liquidity
 
 | Method | Endpoint | Description | Status |
 | :--- | :--- | :--- | :--- |
-| **GET** | `/v1/settlement/dns/cycle` | Current DNS cycle details (net position per participant, settlement time). | Design |
-| **POST** | `/v1/settlement/dns/close` | Trigger DNS cycle close — calculate net positions, settle. | Design |
-| **GET** | `/v1/settlement/dns/history` | Historical DNS cycle settlements. | Design |
-| **POST** | `/v1/liquidity/top-up` | Simulate prefunding or central bank injection. | Design |
-| **GET** | `/v1/liquidity/prefunded/{bic}` | Get prefunded balance for a participant. | Design |
+| **GET** | `/v1/settlement/dns/cycle` | Current DNS cycle details (net position per participant, settlement time). | Done |
+| **POST** | `/v1/settlement/dns/close` | Trigger DNS cycle close — calculate net positions, settle. | Done |
+| **GET** | `/v1/settlement/dns/history` | Historical DNS cycle settlements. | Done |
+| **POST** | `/v1/liquidity/top-up` | Simulate prefunding or central bank injection. | Done |
+| **GET** | `/v1/liquidity/prefunded/{bic}` | Get prefunded balance for a participant. | Done |
 
 ### Limits & Controls
 
 | Method | Endpoint | Description | Status |
 | :--- | :--- | :--- | :--- |
-| **GET** | `/v1/payments/fps/limits` | FPS-specific limits (max single payment, daily cumulative, participant cap). | Design |
-| **PATCH** | `/v1/payments/fps/limits/{bic}` | Update per-participant FPS limits. | Design |
+| **GET** | `/v1/payments/fps/limits` | FPS-specific limits (max single payment, daily cumulative, participant cap). | Done |
+| **PATCH** | `/v1/payments/fps/limits/{bic}` | Update per-participant FPS limits. | Done |
 
 ### System Metadata
 
 | Method | Endpoint | Description | Status |
 | :--- | :--- | :--- | :--- |
-| **GET** | `/v1/system/schedule` | FPS operating schedule (always 24/7, but may include maintenance windows). | Design |
+| **GET** | `/v1/system/schedule` | FPS operating schedule (always 24/7, but may include maintenance windows). | Done |
 
 ---
 
@@ -126,7 +126,7 @@ Response is `pacs.002.001.16` with status:
 - `PDNG` — Pending (liquidity check queued for DNS)
 - `RJCT` — Rejected
 
-**XSDs required**: `pacs.008.001.14`, `pacs.002.001.16`, `head.001.001.04`, `fps_wrapper.xsd` (custom envelope).
+**Note**: FPS does not use XSD validation (CGO-free). XML is parsed directly via Go's `encoding/xml`.
 
 ---
 
@@ -194,8 +194,8 @@ On receipt of an 0200 message, the service:
 
 | Method | Endpoint | Description | Status |
 | :--- | :--- | :--- | :--- |
-| **POST** | `/v1/payments/fps/iso8583` | Accept raw ISO 8583 binary (`application/octet-stream`). Returns 0210 binary. | Design |
-| **GET** | `/v1/payments/fps/iso8583/decode` | Utility: decode an ISO 8583 message and return human-readable JSON for debugging. | Design |
+| **POST** | `/v1/payments/fps/iso8583` | Accept raw ISO 8583 binary (`application/octet-stream`). Returns 0210 binary. | Done |
+| **GET** | `/v1/payments/fps/iso8583/decode` | Utility: decode an ISO 8583 message and return human-readable JSON for debugging. | Done |
 
 The content-type dispatch in the main `POST /v1/payments/fps` handler routes ISO 8583 via:
 ```go
@@ -238,25 +238,27 @@ Beyond the shared participant tables (`participant_profiles`, `participant_liqui
 
 ---
 
-## Proposed Directory Structure
+## Directory Structure
 
 ```
 fps-service/
-├── cmd/server/main.go          # Bootstrap (DB → validator → server)
+├── cmd/server/main.go          # Bootstrap (DB → server → HTTP listener)
 ├── internal/db/
-│   ├── 01_init.sql             # FPS-specific tables
-│   └── 02_seed.sql             # Seed direct/indirect participants
-├── pkg/server/server.go        # Routes + handlers
-├── pkg/ledger/service.go       # Settlement, DNS, limits
-├── pkg/iso20022/               # Reuse pacs.008/pacs.002 models from chaps-service or own
-├── pkg/iso8583/                # ISO 8583 message encode/decode
-│   ├── message.go              # 0200/0210 structs, bitmap helpers
-│   └── fields.go               # DE definitions
-├── xsd/                        # ISO 20022 XSDs (reuse shared or symlink)
-├── test/                       # Test payloads
-├── web/fps-gui/                # Optional React dashboard
-├── Dockerfile
-├── compose.yml
-├── compose-dev.yml
+│   ├── 01_init.sql             # Full schema: 9 tables, custom enums
+│   └── 02_seed.sql             # 4 banks + open DNS cycle
+├── pkg/server/server.go        # 31 endpoints, JSON/XML/ISO 8583 dispatch
+├── pkg/ledger/service.go       # SIP settlement, DNS, limits, gridlock
+├── pkg/iso20022/
+│   ├── bah.go                  # Business Application Header
+│   ├── pacs008.go              # pacs.008 payment struct
+│   ├── pacs002.go              # pacs.002 status response struct
+│   └── serialization_test.go   # 12 tests, all passing
+├── pkg/iso8583/
+│   ├── message.go              # 0200/0210 structs, bitmap parsing (221 lines)
+│   └── message_test.go         # 7 tests, all passing
+├── Dockerfile                  # Multi-stage, CGO_ENABLED=0
+├── compose.yml                 # Production: db + app (port 8081)
+├── compose-dev.yml             # Dev: db only
+├── go.mod / go.sum
 └── README.md
 ```

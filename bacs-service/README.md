@@ -38,71 +38,71 @@ Day 3 (Settlement):  Net amounts are debited/credited. Funds available by 07:00.
 
 | Method | Endpoint | Description | Status |
 | :--- | :--- | :--- | :--- |
-| **POST** | `/v1/payments/bacs/submit` | Upload a Standard 18 file. Accepts `text/plain` body or `multipart/form-data` with file. Returns submission receipt with SU, volume, value, hash. | Design |
-| **GET** | `/v1/payments/bacs/submit/{id}` | Get submission status, volume, value, error count. | Design |
-| **GET** | `/v1/payments/bacs/submit` | List submissions filtered by status, SU, date range. | Design |
-| **DELETE** | `/v1/payments/bacs/submit/{id}` | Recall a submission before input day cut-off. | Design |
+| **POST** | `/v1/payments/bacs/submit` | Upload a Standard 18 file. Accepts `text/plain` body or `multipart/form-data` with file. Returns submission receipt with SU, volume, value, hash. | Done |
+| **GET** | `/v1/payments/bacs/submit/{id}` | Get submission status, volume, value, error count. | Done |
+| **GET** | `/v1/payments/bacs/submit` | List submissions filtered by status, SU, date range. | Done |
+| **DELETE** | `/v1/payments/bacs/submit/{id}` | Recall a submission before input day cut-off. | Done |
 
 ### Cycle Management
 
 | Method | Endpoint | Description | Status |
 | :--- | :--- | :--- | :--- |
-| **GET** | `/v1/payments/bacs/cycle/current` | Get current cycle info: input day date, processing day date, settlement day date, cut-off time. | Design |
-| **GET** | `/v1/payments/bacs/cycle/{cycle-date}` | Get a specific settlement cycle (e.g. `/cycle/2026-05-20`). | Design |
-| **GET** | `/v1/payments/bacs/cycle` | List past cycles (recent 30 days). | Design |
-| **POST** | `/v1/payments/bacs/cycle/close` | **Operator only**: force-close input day and lock further submissions for this cycle. | Design |
+| **GET** | `/v1/payments/bacs/cycle/current` | Get current cycle info: input day date, processing day date, settlement day date, cut-off time. | Done |
+| **GET** | `/v1/payments/bacs/cycle/{cycle-date}` | Get a specific settlement cycle (e.g. `/cycle/2026-05-20`). | Done |
+| **GET** | `/v1/payments/bacs/cycle` | List past cycles (recent 30 days). | Done |
+| **POST** | `/v1/payments/bacs/cycle/close` | **Operator only**: force-close input day and lock further submissions for this cycle. | Done |
 
 ### Service User Management
 
 | Method | Endpoint | Description | Status |
 | :--- | :--- | :--- | :--- |
-| **POST** | `/v1/participants/register` | Onboard a participant with BIC, name, SU/DSU flag, sponsor BIC. | Design |
-| **GET** | `/v1/participants` | List participants. | Design |
-| **PATCH** | `/v1/participants/{bic}/status` | Update status (ACTIVE/SUSPENDED/DISABLED). | Design |
-| **POST** | `/v1/participants/{bic}/block` | Kill-switch block. | Design |
-| **GET** | `/v1/participants/{bic}/block` | Block details. | Design |
-| **DELETE** | `/v1/participants/{bic}/block` | Unblock. | Design |
+| **POST** | `/v1/participants/register` | Onboard a participant with BIC, name, SU/DSU flag, sponsor BIC. | Done |
+| **GET** | `/v1/participants` | List participants. | Done |
+| **PATCH** | `/v1/participants/{bic}/status` | Update status (ACTIVE/SUSPENDED/DISABLED). | Done |
+| **POST** | `/v1/participants/{bic}/block` | Kill-switch block. | Done |
+| **GET** | `/v1/participants/{bic}/block` | Block details. | Done |
+| **DELETE** | `/v1/participants/{bic}/block` | Unblock. | Done |
 
 ### Direct Debit Mandates (AUDDIS)
 
 | Method | Endpoint | Description | Status |
 | :--- | :--- | :--- | :--- |
-| **POST** | `/v1/payments/bacs/mandates` | Create a new Direct Debit mandate (AUDDIS instruction). | Design |
-| **GET** | `/v1/payments/bacs/mandates/{ref}` | Get mandate details, status, history. | Design |
-| **GET** | `/v1/payments/bacs/mandates` | List mandates for a SU/DSU. | Design |
-| **PATCH** | `/v1/payments/bacs/mandates/{ref}` | Amend mandate (amount, frequency, dates). | Design |
-| **DELETE** | `/v1/payments/bacs/mandates/{ref}` | Cancel a mandate (AUDDIS cancellation). | Design |
-| **POST** | `/v1/payments/bacs/mandates/{ref}/claim` | Submit a mandate claim against a specific account. | Design |
+| **POST** | `/v1/payments/bacs/mandates` | Create a new Direct Debit mandate (AUDDIS instruction). | Done |
+| **GET** | `/v1/payments/bacs/mandates/{ref}` | Get mandate details, status, history. | Done |
+| **GET** | `/v1/payments/bacs/mandates` | List mandates for a SU/DSU. | Done |
+| **PATCH** | `/v1/payments/bacs/mandates/{ref}` | Amend mandate (amount, frequency, dates). | Done |
+| **DELETE** | `/v1/payments/bacs/mandates/{ref}` | Cancel a mandate (AUDDIS cancellation). | Done |
+| **POST** | `/v1/payments/bacs/mandates/{ref}/claim` | Submit a mandate claim against a specific account. | Done |
 
 ### Returns & Rejects (ARUDD)
 
 | Method | Endpoint | Description | Status |
 | :--- | :--- | :--- | :--- |
-| **GET** | `/v1/payments/bacs/returns` | List ARUDD returns (unpaid Direct Debits). | Design |
-| **POST** | `/v1/payments/bacs/returns` | Submit an ARUDD return instruction. | Design |
-| **GET** | `/v1/payments/bacs/rejects` | List submission rejects (file format errors or validation failures). | Design |
-| **GET** | `/v1/payments/bacs/reports/{cycle-date}` | End-of-cycle settlement reports per SU (DD/DC totals, net positions). | Design |
+| **GET** | `/v1/payments/bacs/returns` | List ARUDD returns (unpaid Direct Debits). | Done |
+| **POST** | `/v1/payments/bacs/returns` | Submit an ARUDD return instruction. | Done |
+| **GET** | `/v1/payments/bacs/rejects` | List submission rejects (file format errors or validation failures). | Done |
+| **GET** | `/v1/payments/bacs/reports/{cycle-date}` | End-of-cycle settlement reports per SU (DD/DC totals, net positions). | Done |
 
 ### Reports
 
 | Method | Endpoint | Description | Status |
 | :--- | :--- | :--- | :--- |
-| **GET** | `/v1/payments/bacs/reports/{cycle-date}/su/{bic}` | Per-SU settlement report for a given cycle. | Design |
-| **GET** | `/v1/payments/bacs/reports/{cycle-date}/summary` | Cycle summary: total volume, total value, net positions, error rates. | Design |
-| **GET** | `/v1/payments/bacs/reports/su/{bic}` | Historical reports for a specific Service User. | Design |
+| **GET** | `/v1/payments/bacs/reports/{cycle-date}/su/{bic}` | Per-SU settlement report for a given cycle. | Done |
+| **GET** | `/v1/payments/bacs/reports/{cycle-date}/summary` | Cycle summary: total volume, total value, net positions, error rates. | Done |
+| **GET** | `/v1/payments/bacs/reports/su/{bic}` | Historical reports for a specific Service User. | Done |
 
 ### Limits & Controls
 
 | Method | Endpoint | Description | Status |
 | :--- | :--- | :--- | :--- |
-| **GET** | `/v1/payments/bacs/limits` | BACS limits (max file size, max per-transaction, SU daily caps). | Design |
-| **PATCH** | `/v1/payments/bacs/limits/{bic}` | Update per-participant BACS limits. | Design |
+| **GET** | `/v1/payments/bacs/limits` | BACS limits (max file size, max per-transaction, SU daily caps). | Done |
+| **PATCH** | `/v1/payments/bacs/limits/{bic}` | Update per-participant BACS limits. | Done |
 
 ### System Metadata
 
 | Method | Endpoint | Description | Status |
 | :--- | :--- | :--- | :--- |
-| **GET** | `/v1/system/schedule` | Returns upcoming cycle dates (input/processing/settlement days for the next N cycles). | Design |
+| **GET** | `/v1/system/schedule` | Returns upcoming cycle dates (input/processing/settlement days for the next N cycles). | Done |
 
 ---
 
@@ -202,25 +202,22 @@ Beyond shared participant tables:
 
 ---
 
-## Proposed Directory Structure
+## Directory Structure
 
 ```
 bacs-service/
-├── cmd/server/main.go            # Bootstrap
+├── cmd/server/main.go            # Bootstrap (DB → server → HTTP listener)
 ├── internal/db/
-│   ├── 01_init.sql               # BACS-specific tables + cycle seed
-│   └── 02_seed.sql               # Sample SUs and DSUs
-├── pkg/server/server.go          # Routes + handlers
-├── pkg/ledger/service.go         # Batch settlement, cycle management
-├── pkg/standard18/               # Standard 18 parser/generator
-│   ├── parser.go                 # Parse 80-char lines into structs
-│   ├── types.go                  # Record type structs (1-9, A-I)
-│   └── validator.go              # Syntax + business validation
-├── pkg/reports/                  # Settlement report generation
-├── test/                         # Test files (valid/invalid Standard 18)
-├── web/bacs-gui/                 # Optional React dashboard
-├── Dockerfile
-├── compose.yml
-├── compose-dev.yml
+│   ├── 01_init.sql               # Full schema: 10 tables, custom enums
+│   └── 02_seed.sql               # 4 banks + open cycle
+├── pkg/server/server.go          # 24 endpoints, JSON + text/plain dispatch
+├── pkg/ledger/service.go         # Batch settlement, netting, cycles, mandates, reports
+├── pkg/standard18/
+│   ├── parser.go                 # Standard 18 fixed-width parser (178 lines)
+│   └── parser_test.go            # 13 tests, all passing
+├── Dockerfile                    # Multi-stage, CGO_ENABLED=0
+├── compose.yml                   # Production: db + app (port 8082)
+├── compose-dev.yml               # Dev: db only
+├── go.mod / go.sum
 └── README.md
 ```
