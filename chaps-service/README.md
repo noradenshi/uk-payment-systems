@@ -256,6 +256,22 @@ Interbank Cut-off:   18:00
 
 ---
 
+## Testing
+
+| Package | File | Tests | Description |
+| :--- | :--- | :--- | :--- |
+| `pkg/iso20022` | `serialization_test.go` | 13 | pacs.008 unmarshal, pacs.002 marshal (ACTC/RJCT/PDNG), BAH construction, envelope wrapping, round-trip, reason codes, amount parsing |
+| `pkg/ledger` | `service_test.go` | 9 | Error sentinel values, settlement result struct, limits constants, constructor, model types |
+| `pkg/server` | `server_test.go` | 9 | BIC validation (valid/invalid), HTTP helpers (badRequest, writeJSON), CORS headers, route registration |
+
+Run all tests:
+
+```bash
+go test ./pkg/... -v -count=1
+```
+
+---
+
 ## Directory Structure
 
 ```
@@ -269,7 +285,14 @@ chaps-service/
 ├── pkg/iso20022/
 │   ├── bah.go                    # Business Application Header (AppHdr) struct + constructor
 │   ├── pacs008.go                # pacs.008 payment message struct (XML tags)
-│   └── pacs002.go                # pacs.002 status response struct + NewPacs002 constructor
+│   ├── pacs002.go                # pacs.002 status response struct + NewPacs002 constructor
+│   └── serialization_test.go     # 13 tests: marshal/unmarshal, envelope, round-trip
+├── pkg/ledger/
+│   ├── service.go                # Settlement engine, participant management, positions, limits
+│   └── service_test.go           # 9 tests: sentinels, constants, types
+├── pkg/server/
+│   ├── server.go                 # HTTP router + 17 handlers, JSON/XML dispatch
+│   └── server_test.go            # 9 tests: BIC validation, HTTP helpers, CORS, routes
 ├── pkg/validator/validator.go    # XSD schema registry, envelope validation, XPath extraction
 ├── xsd/
 │   ├── chaps_wrapper.xsd         # Custom wrapper envelope (BizMsg)

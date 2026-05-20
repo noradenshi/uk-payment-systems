@@ -202,6 +202,20 @@ Beyond shared participant tables:
 
 ---
 
+## Testing
+
+| Package | File | Tests | Description |
+| :--- | :--- | :--- | :--- |
+| `pkg/standard18` | `parser_test.go` | 13 | Basic file parsing, AUDDIS, CRLF handling, validation, pence conversion, multiple records, line padding, zero values |
+
+Run all tests:
+
+```bash
+go test ./pkg/... -v -count=1
+```
+
+---
+
 ## Directory Structure
 
 ```
@@ -214,7 +228,7 @@ bacs-service/
 ├── pkg/ledger/service.go         # Batch settlement, netting, cycles, mandates, reports
 ├── pkg/standard18/
 │   ├── parser.go                 # Standard 18 fixed-width parser (178 lines)
-│   └── parser_test.go            # 13 tests, all passing
+│   └── parser_test.go            # 13 tests
 ├── Dockerfile                    # Multi-stage, CGO_ENABLED=0
 ├── compose.yml                   # Production: db + app (port 8082)
 ├── compose-dev.yml               # Dev: db only
