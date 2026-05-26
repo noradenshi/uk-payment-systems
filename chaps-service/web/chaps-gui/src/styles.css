@@ -86,6 +86,38 @@ h2 {
   text-align: right;
 }
 
+.top-actions {
+  display: grid;
+  gap: 10px;
+  justify-items: end;
+}
+
+.segmented {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(108px, 1fr));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f8fafc;
+}
+
+.segmented button {
+  min-height: 38px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 900;
+}
+
+.segmented button + button {
+  border-left: 1px solid var(--border);
+}
+
+.segmented .active-tab {
+  background: #0f766e;
+  color: #ffffff;
+}
+
 .dot {
   width: 10px;
   height: 10px;
@@ -113,6 +145,30 @@ h2 {
 .work-grid,
 .table-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.page-intro {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.bank-picker {
+  width: min(420px, 100%);
+}
+
+.compact-schedule {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #f8fafc;
+  color: var(--muted);
+  padding: 8px 12px;
+  font-weight: 800;
 }
 
 .metric-card,
@@ -222,6 +278,32 @@ select {
   background: #fef2f2;
 }
 
+.detail-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.detail-list div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid #e5e7eb;
+  padding: 9px 0;
+}
+
+.detail-list dt {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.detail-list dd {
+  margin: 0;
+  color: var(--ink);
+  font-weight: 900;
+  text-align: right;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -288,8 +370,14 @@ tbody tr:hover {
   }
 
   .topbar,
-  .panel-head {
+  .panel-head,
+  .page-intro {
     flex-direction: column;
+    align-items: stretch;
+  }
+
+  .top-actions {
+    justify-items: stretch;
   }
 
   .status-strip {

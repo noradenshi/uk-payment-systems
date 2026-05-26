@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CHAPS - Bank</title>
+  <link rel="stylesheet" href="../assets/ukps-pages.css" />
+</head>
+<body>
+  <section id="loginScreen" class="login-screen">
+    <form id="loginForm" class="login-card">
+      <p class="eyebrow">Logowanie pracownika banku</p>
+      <h1><span data-scheme-name></span> - bank</h1>
+      <div class="form-grid">
+        <label>BIC banku <input id="loginBic" value="BARCGB2L" autocomplete="username" /></label>
+        <label>Hasło <input id="loginPassword" type="password" value="bank123" autocomplete="current-password" /></label>
+      </div>
+      <button type="submit">Zaloguj</button>
+      <p class="notice">Hasło demonstracyjne: bank123</p>
+      <div class="status-strip"><span id="statusDot" class="dot"></span><strong id="message">Wymagane logowanie</strong></div>
+    </form>
+  </section>
+
+  <main id="appScreen" class="shell hidden">
+    <section class="topbar">
+      <div><p class="eyebrow">Pracownik banku</p><h1><span data-scheme-name></span> - panel banku</h1><p id="loggedBank"></p></div>
+      <div class="top-actions"><a class="link-button secondary-button" href="../index.html">Strony</a><button id="refresh" data-free="true" type="button">Odśwież</button><button id="logout" class="ghost-button" data-free="true" type="button">Wyloguj</button><div class="status-strip"><span id="statusDot" class="dot"></span><strong id="message">Gotowe</strong></div></div>
+    </section>
+    <section class="metrics-grid">
+      <article class="metric-card"><span>Saldo</span><strong id="metricBalance">-</strong></article>
+      <article class="metric-card"><span>Dostępne środki</span><strong id="metricAvailable">-</strong></article>
+      <article class="metric-card"><span>Limit</span><strong id="metricLimit">-</strong></article>
+      <article class="metric-card"><span>Płatności banku</span><strong id="metricBankPayments">-</strong></article>
+    </section>
+    <section class="work-grid">
+      <form id="paymentForm" class="panel">
+        <div class="panel-head"><div><p class="section-label">Nowa płatność CHAPS</p><h2>Wyślij płatność</h2></div><button id="validatePayment" class="secondary-button" type="button">Waliduj</button></div>
+        <div class="form-grid">
+          <label>ID wiadomości <input id="msgId" /></label>
+          <label>BIC nadawcy <input id="senderBic" readonly /></label>
+          <label>BIC odbiorcy <input id="receiverBic" value="HSBCGB44" /></label>
+          <label>Kwota <input id="amount" type="number" /></label>
+        </div>
+        <button type="submit">Wyślij płatność</button>
+        <pre id="validationResult" class="notice">Brak walidacji.</pre>
+      </form>
+      <article class="panel"><h2>Szczegóły banku</h2><pre id="bankDetails">-</pre></article>
+    </section>
+    <section class="panel wide">
+      <h2>Płatności banku</h2>
+      <div class="table-wrap"><table><thead><tr><th>ID</th><th>Nadawca</th><th>Odbiorca</th><th>Kwota</th><th>Status</th></tr></thead><tbody id="paymentsBody"></tbody></table></div>
+    </section>
+  </main>
+  <script>window.UKPS_PAGE = { scheme: "chaps", role: "bank" };</script>
+  <script src="../assets/ukps-pages.js"></script>
+</body>
+</html>

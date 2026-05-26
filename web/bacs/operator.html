@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BACS - Operator</title>
+  <link rel="stylesheet" href="../assets/ukps-pages.css" />
+</head>
+<body>
+  <main class="shell">
+    <section class="topbar">
+      <div><p class="eyebrow">Operator serwisu</p><h1><span data-scheme-name></span> - panel operatora</h1></div>
+      <div class="top-actions"><a class="link-button secondary-button" href="../index.html">Strony</a><button id="refresh" data-free="true" type="button">Odśwież</button><div class="status-strip"><span id="statusDot" class="dot"></span><strong id="message">Start</strong></div></div>
+    </section>
+    <section class="page-intro"><div><p class="section-label" data-scheme-title></p><h2>Uczestnicy, pliki wejściowe i cykle rozliczeniowe</h2></div></section>
+    <section class="metrics-grid">
+      <article class="metric-card"><span>Uczestnicy</span><strong id="metricParticipants">-</strong></article>
+      <article class="metric-card"><span>Rozliczone</span><strong id="metricSettled">-</strong></article>
+      <article class="metric-card"><span>W przetwarzaniu</span><strong id="metricQueued">-</strong></article>
+      <article class="metric-card"><span>Odrzucone</span><strong id="metricRejected">-</strong></article>
+    </section>
+    <section class="work-grid">
+      <form id="registerParticipant" class="panel">
+        <div class="panel-head"><div><p class="section-label">Rejestracja</p><h2>Nowy service user</h2></div></div>
+        <div class="form-grid">
+          <label>BIC <input id="newBic" value="NEWBACS1" /></label>
+          <label>Nazwa <input id="newName" value="New BACS Service User" /></label>
+          <label>Saldo początkowe <input id="newBalance" type="number" value="100000" /></label>
+          <label>Kod SU <input id="newSuCode" value="123456" /></label>
+          <label><input id="newServiceUser" type="checkbox" checked /> Service user</label>
+          <label><input id="newDestUser" type="checkbox" checked /> Destination user</label>
+        </div>
+        <button type="submit">Zarejestruj uczestnika</button>
+      </form>
+      <article class="panel">
+        <div class="panel-head"><div><p class="section-label">Kontrola</p><h2>Status, płynność, limity i cykl</h2></div></div>
+        <div class="form-grid">
+          <label>Bank/SU <select id="opsBic" data-participant-options></select></label>
+          <label>Status <select id="opsStatus"><option>ACTIVE</option><option>SUSPENDED</option><option>DISABLED</option></select></label>
+          <label>Powód <input id="opsReason" value="OPERATOR_CONTROL" /></label>
+          <label>Zasilenie <input id="topUpAmount" type="number" value="100000" /></label>
+          <label>Limit zadłużenia <input id="overdraftLimit" type="number" value="30000000" /></label>
+        </div>
+        <div class="button-row">
+          <button id="setStatus" class="secondary-button" type="button">Ustaw status</button>
+          <button id="blockParticipant" class="danger-button" type="button">Zablokuj</button>
+          <button id="unblockParticipant" class="secondary-button" type="button">Odblokuj</button>
+          <button id="topUp" class="secondary-button" type="button">Zasil</button>
+          <button id="updateLimit" class="secondary-button" type="button">Ustaw limit</button>
+          <button id="closeCycle" class="secondary-button" type="button">Zamknij cykl</button>
+        </div>
+      </article>
+    </section>
+    <section class="table-grid">
+      <article class="panel"><h2>Uczestnicy</h2><div class="table-wrap"><table><thead><tr><th>BIC</th><th>Nazwa</th><th>Status</th><th>Saldo</th><th>Limit</th></tr></thead><tbody id="participantsBody"></tbody></table></div></article>
+      <article class="panel"><h2>Zgłoszenia BACS</h2><div class="table-wrap"><table><thead><tr><th>ID</th><th>SU</th><th>Odbiorca</th><th>Kwota</th><th>Status</th></tr></thead><tbody id="paymentsBody"></tbody></table></div></article>
+    </section>
+    <section class="work-grid"><article class="panel"><h2>Limity systemu</h2><pre id="systemLimits">-</pre></article><article class="panel"><h2>Harmonogram</h2><pre id="systemSchedule">-</pre></article></section>
+  </main>
+  <script>window.UKPS_PAGE = { scheme: "bacs", role: "operator" };</script>
+  <script src="../assets/ukps-pages.js"></script>
+</body>
+</html>

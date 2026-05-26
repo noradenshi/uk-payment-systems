@@ -2,75 +2,10 @@
 <html lang="pl">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="refresh" content="0; url=../index.html" />
   <title>UKPS Operator GUI</title>
-  <style>
-    body { margin: 0; font-family: Arial, sans-serif; background: #f4f6f8; color: #111827; }
-    main { max-width: 1220px; margin: 0 auto; padding: 22px; }
-    .bar, .grid, .actions { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; align-items: stretch; }
-    .panel { background: white; border: 1px solid #d9e1ec; border-radius: 8px; padding: 16px; }
-    label { display: grid; gap: 6px; font-size: 13px; color: #4b5563; }
-    input, select, button { border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px; font: inherit; background: white; }
-    button { color: white; background: #0f766e; border-color: #0f766e; cursor: pointer; }
-    button.danger { background: #b42318; border-color: #b42318; }
-    table { width: 100%; border-collapse: collapse; font-size: 14px; }
-    th, td { text-align: left; border-bottom: 1px solid #e5e7eb; padding: 8px; }
-    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
-  </style>
 </head>
 <body>
-  <main>
-    <h1>Panel operatora UKPS</h1>
-    <section class="panel bar">
-      <label>System
-        <select id="system">
-          <option value="http://localhost:8080">CHAPS</option>
-          <option value="http://localhost:8081">FPS</option>
-          <option value="http://localhost:8082">BACS</option>
-        </select>
-      </label>
-      <label>BIC <input id="bic" value="BARCGB2L" /></label>
-      <label>Kwota zasilenia <input id="amount" type="number" value="100000" /></label>
-      <label>Limit zadłużenia <input id="limit" type="number" value="30000000" /></label>
-      <button id="refresh">Odśwież</button>
-      <button id="topup">Zasil z banku centralnego</button>
-      <button id="block" class="danger">Zablokuj</button>
-      <button id="unblock">Odblokuj</button>
-      <button id="gridlock">Gridlock</button>
-    </section>
-    <section class="grid">
-      <article class="panel"><h2>Uczestnicy i emergency</h2><table><thead><tr><th>BIC</th><th>Nazwa</th><th>Saldo</th><th>Limit</th><th>Status</th></tr></thead><tbody id="participants"></tbody></table></article>
-      <article class="panel"><h2>Transakcje / zlecenia</h2><table><thead><tr><th>ID</th><th>Trasa</th><th>Kwota</th><th>Status</th></tr></thead><tbody id="payments"></tbody></table></article>
-    </section>
-  </main>
-  <script>
-    const money = new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP", maximumFractionDigits: 0 });
-    const $ = (id) => document.getElementById(id);
-    const central = "http://localhost:8090";
-    function scheme(base) { return base.endsWith("8080") ? "chaps" : base.endsWith("8081") ? "fps" : "bacs"; }
-    function paymentPath(base) { return base.endsWith("8080") ? "/v1/payments/chaps?limit=100" : base.endsWith("8081") ? "/v1/payments/fps?limit=100" : "/v1/payments/bacs/submit"; }
-    async function json(url, init) {
-      const res = await fetch(url, init);
-      if (!res.ok) throw new Error(await res.text());
-      return res.json();
-    }
-    async function refresh() {
-      const base = $("system").value;
-      const participants = await json(base + "/v1/participants");
-      $("participants").innerHTML = participants.map((p) => {
-        const emergency = Number(p.balance || 0) < -Number(p.overdraft_limit || 0);
-        return `<tr style="${emergency ? "background:#fee2e2" : ""}"><td>${p.bic}</td><td>${p.name}</td><td>${money.format(Number(p.balance || 0))}</td><td>${money.format(Number(p.overdraft_limit || 0))}</td><td>${p.status}</td></tr>`;
-      }).join("");
-      const payments = await json(base + paymentPath(base)).catch(() => []);
-      $("payments").innerHTML = payments.map((p) => `<tr><td>${p.msg_id || p.id}</td><td>${p.sender_bic || p.su_bic || ""} → ${p.receiver_bic || ""}</td><td>${money.format(Number(p.amount || p.total_value || 0))}</td><td>${p.status}</td></tr>`).join("");
-    }
-    $("refresh").onclick = refresh;
-    $("topup").onclick = async () => { await json(central + "/v1/central-bank/top-up", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ system: scheme($("system").value), bic: $("bic").value, amount: Number($("amount").value) }) }); refresh(); };
-    $("block").onclick = async () => { await json($("system").value + `/v1/participants/${$("bic").value}/block`, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ reason: "OPERATOR_EMERGENCY" }) }); refresh(); };
-    $("unblock").onclick = async () => { await json($("system").value + `/v1/participants/${$("bic").value}/block`, { method: "DELETE" }); refresh(); };
-    $("gridlock").onclick = async () => { const base = $("system").value; if (!base.endsWith("8082")) await json(base + `/v1/payments/${scheme(base)}/gridlock/resolve`, { method: "POST" }); refresh(); };
-    refresh();
-  </script>
+  <p>Operator ma teraz osobne strony dla CHAPS, FPS i BACS: <a href="../index.html">otwórz listę stron</a>.</p>
 </body>
 </html>
