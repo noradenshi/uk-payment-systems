@@ -238,6 +238,21 @@ Beyond the shared participant tables (`participant_profiles`, `participant_liqui
 
 ---
 
+## Testing
+
+| Package | File | Tests | Description |
+| :--- | :--- | :--- | :--- |
+| `pkg/iso20022` | `serialization_test.go` | 12 | pacs.008 unmarshal, pacs.002 marshal (ACTC/RJCT/PDNG), BAH construction, envelope wrapping, round-trip, reason codes, timestamps |
+| `pkg/iso8583` | `message_test.go` | 7 | 0200 parse, MTI validation, optional fields, amount+trace, 0210 encode, round-trip, full field parse |
+
+Run all tests:
+
+```bash
+go test ./pkg/... -v -count=1
+```
+
+---
+
 ## Directory Structure
 
 ```
@@ -252,10 +267,10 @@ fps-service/
 │   ├── bah.go                  # Business Application Header
 │   ├── pacs008.go              # pacs.008 payment struct
 │   ├── pacs002.go              # pacs.002 status response struct
-│   └── serialization_test.go   # 12 tests, all passing
+│   └── serialization_test.go   # 12 tests
 ├── pkg/iso8583/
 │   ├── message.go              # 0200/0210 structs, bitmap parsing (221 lines)
-│   └── message_test.go         # 7 tests, all passing
+│   └── message_test.go         # 7 tests
 ├── Dockerfile                  # Multi-stage, CGO_ENABLED=0
 ├── compose.yml                 # Production: db + app (port 8081)
 ├── compose-dev.yml             # Dev: db only

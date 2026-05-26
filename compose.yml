@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: password123
       POSTGRES_DB: chaps_ledger
     ports:
-      - "5432:5432"
+      - "5420:5432"
     volumes:
       - ./chaps-service/internal/db:/docker-entrypoint-initdb.d:ro
       - chaps_data:/var/lib/postgresql
@@ -22,7 +22,7 @@ services:
     container_name: ukps_chaps_server
     platform: linux/amd64
     ports:
-      - "8080:8080"
+      - "8420:8080"
     environment:
       DATABASE_URL: "postgres://chaps_admin:password123@chaps-db:5432/chaps_ledger"
     depends_on:
@@ -37,7 +37,7 @@ services:
       POSTGRES_PASSWORD: password123
       POSTGRES_DB: fps_ledger
     ports:
-      - "5433:5432"
+      - "5421:5432"
     volumes:
       - ./fps-service/internal/db:/docker-entrypoint-initdb.d:ro
       - fps_data:/var/lib/postgresql
@@ -52,7 +52,7 @@ services:
     container_name: ukps_fps_server
     platform: linux/amd64
     ports:
-      - "8081:8081"
+      - "8421:8081"
     environment:
       DATABASE_URL: "postgres://fps_admin:password123@fps-db:5432/fps_ledger"
     depends_on:
@@ -67,7 +67,7 @@ services:
       POSTGRES_PASSWORD: password123
       POSTGRES_DB: bacs_ledger
     ports:
-      - "5434:5432"
+      - "5422:5432"
     volumes:
       - ./bacs-service/internal/db:/docker-entrypoint-initdb.d:ro
       - bacs_data:/var/lib/postgresql
@@ -82,7 +82,7 @@ services:
     container_name: ukps_bacs_server
     platform: linux/amd64
     ports:
-      - "8082:8082"
+      - "8422:8082"
     environment:
       DATABASE_URL: "postgres://bacs_admin:password123@bacs-db:5432/bacs_ledger"
     depends_on:
