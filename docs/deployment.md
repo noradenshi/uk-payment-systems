@@ -1,38 +1,50 @@
 # Deployment guide — UKPS
 
-UKPS nie rozdziela osobnych plików dla dev i produkcji — topologia jest jedna (`compose.yml`).
-Tryb pracy (demo / production) wybiera się przez pole `mode` w `config/sessions.json` każdego serwisu.
-
-| Tryb | Zachowanie |
-|---|---|
-| `demo` | Przyśpieszony tick (co `demo_session_minutes` s), skrócone czasy cykli |
-| `production` | Tick co 60s, rzeczywiste czasy (np. 1440 min dla BACS, wall-clock settlement_times dla FPS) |
+Tryb pracy (demo/production) sterowany jest przez `demo_session_minutes` w `config/sessions.json` — **nie** przez osobne pliki compose ani zmienne środowiskowe deploymentu. Pole `mode` w configu istnieje wyłącznie jako dokumentacja; kod Go sprawdza tylko `demo_session_minutes > 0`.
 
 ---
 
-## Topologia (produkcja)
+## Topologia
 
 ```
-┌───────────────────────────────────────────────────────────────┐
-│                      docker compose                           │
-│                                                               │
-│  ┌────────────┐   ┌────────────┐   ┌────────────┐           │
-│  │ chaps-db   │   │ fps-db     │   │ bacs-db    │           │
-│  │ postgres   │   │ postgres   │   │ postgres   │           │
-│  │ :5420      │   │ :5421      │   │ :5422      │           │
-│  └─────┬──────┘   └─────┬──────┘   └─────┬──────┘           │
-│        │                │                │                   │
-│  ┌─────▼──────┐   ┌─────▼──────┐   ┌─────▼──────┐           │
-│  │ chaps-app  │   │ fps-app    │   │ bacs-app   │           │
-│  │ :8420      │   │ :8421      │   │ :8422      │           │
-│  └────────────┘   └─────┬──────┘   └────────────┘           │
-│                         │                                    │
-│                  ┌──────▼──────┐                             │
-│                  │ fps ISO 8583 │                             │
-│                  │ :7421       │                             │
-│                  └─────────────┘                             │
-└───────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│                        docker-compose                              │
+│                                                                    │
+│  ┌────────────┐   ┌────────────┐   ┌────────────┐                │
+│  │ chaps-db   │   │ fps-db     │   │ bacs-db    │                │
+│  │ postgres   │   │ postgres   │   │ postgres   │                │
+│  │ :5420      │   │ :5421      │   │ :5422      │                │
+│  └─────┬──────┘   └─────┬──────┘   └─────┬──────┘                │
+│        │                │                │                        │
+│  ┌─────▼──────┐   ┌─────▼──────┐   ┌─────▼──────┐                │
+│  │ chaps-app  │   │ fps-app    │   │ bacs-app   │                │
+│  │ :8420      │   │ :8421 +    │   │ :8422      │                │
+│  │ Go + React │   │ :7421      │   │ Go         │                │
+│  └────────────┘   │ Go + React │   └────────────┘                │
+│                   └────────────┘                                  │
+└────────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## Uruchomienie
+
+```bash
+# Uruchom wszystkie serwisy + bazy (z rebuildem)
+docker compose up --build -d
+
+# Uruchom tylko bazy (serwisy na hoście z hot-reload)
+docker compose -f compose-dev.yml up -d
+```
+
+Po `up --build -d`:
+
+| URL | Co to |
+|---|---|
+| `http://localhost:8420` | CHAPS API + GUI |
+| `http://localhost:8421` | FPS API + GUI |
+| `http://localhost:8422` | BACS API |
+| `:7421` | FPS — ISO 8583 TCP socket |
 
 ### Porty
 
@@ -46,58 +58,50 @@ Tryb pracy (demo / production) wybiera się przez pole `mode` w `config/sessions
 | FPS DB | 5432 | 5421 |
 | BACS DB | 5432 | 5422 |
 
----
-
-## Development (praca lokalna)
-
-Uruchamia tylko bazy danych — serwisy Go działają na hoście z hot-reload:
+### Zatrzymanie
 
 ```bash
-# 1. Uruchom bazy
-docker compose -f compose-dev.yml up -d
-
-# 2. Uruchom serwis (w osobnym terminalu)
-cd chaps-service && go run ./cmd/server/main.go
-
-# 3. Dla FPS lub BACS — analogicznie
-cd fps-service && go run ./cmd/server/main.go
-cd bacs-service && go run ./cmd/server/main.go
-```
-
-### Zmienne środowiskowe
-
-Każdy serwis ma domyślne wartości w `main.go` — można nadpisać przez zmienne środowiskowe:
-
-| Zmienna | Serwis | Domyślnie |
-|---|---|---|
-| `DATABASE_URL` | Wszystkie | `postgres://{user}:{pass}@127.0.0.1:{port}/{db}?sslmode=disable` |
-| `ISO8583_PORT` | FPS | `:7421` |
-
----
-
-## Produkcja (Docker Compose)
-
-```bash
-# Uruchom wszystkie serwisy
-docker compose up -d --build
-
-# Logi
-docker compose logs -f
-
-# Zatrzymaj
+# Zatrzymaj bez utraty danych
 docker compose down
+
+# Pełny reset (usuwa volumes)
+docker compose down -v
 ```
+
+### Development (hot-reload)
+
+Serwisy uruchomione lokalnie (poza Dockerem) łączą się do baz z `compose-dev.yml`:
+
+```bash
+docker compose -f compose-dev.yml up -d
+cd chaps-service && go run ./cmd/server/main.go
+```
+
+Domyślne `DATABASE_URL` w `main.go` używają `127.0.0.1` i portów 5432/5433/5434 — pasują do `compose-dev.yml`.
 
 ---
 
-## Tryb demo
+## Tryb demo a production
 
-W `config/sessions.json` ustaw `"mode": "demo"` i `"demo_session_minutes": 15` (lub mniej).
+Ustawienie `demo_session_minutes` w `config/sessions.json` zmienia jedynie **szybkość** symulacji — nie wpływa na architekturę, porty, ani topologię. Godziny operacyjne (`opening_time`, `closing_time`, `interbank_cutoff`, `input_cutoff`) są zawsze egzekwowane względem czasu wall-clock, niezależnie od trybu.
 
-W trybie demo:
-- Tick schedulera = `min(demo_session_minutes, 60)` s
-- Czasy cykli BACS capped do `demo_session_minutes`
-- Cykle DNS FPS zamykane co `demo_session_minutes`
+| demo_session_minutes | Tick schedulera | FPS DNS | BACS cykl |
+|---|---|---|---|
+| `> 0` (demo) | `min(demo, 60)` s | Cykl zamykany co `demo_session_minutes` | Czas trwania capped do `demo_session_minutes` |
+| `0` / brak (production) | 60 s | Zamknięcie o wall-clock `settlement_times` | Pełne 1440 min na fazę |
+
+### Przykład
+
+```json
+"fps": {
+    "mode": "demo",
+    "demo_session_minutes": 15,
+    "settlement_times": ["03:00", "09:00", "12:00", "15:00", "18:00", "21:00"]
+}
+```
+
+- Tryb **demo** (`demo_session_minutes: 15`): tick co 15s, DNS zamykany co 15 min, godziny operacyjne 00:00-23:59 wall-clock.
+- Tryb **production** (`demo_session_minutes: 0`): tick co 60s, DNS zamykany o 03:00/09:00/12:00/15:00/18:00/21:00 wall-clock.
 
 ---
 
@@ -112,17 +116,16 @@ W trybie demo:
 
 ### Uwagi
 
-- **CHAPS wymaga CGO** — libxml2 do walidacji XSD. Build statyczny w Alpine.
-- **FPS wymaga CGO** — identycznie jak CHAPS (libxml2). Oba serwisy używają tego samego image patternu.
+- **CHAPS + FPS wymagają CGO** — libxml2 do walidacji XSD. Build statyczny w Alpine.
 - **BACS** — CGO-free, prostszy build.
-- **Postgres 18** — używana jest funkcja `uuidv7()` niedostępna w starszych wersjach.
+- **Postgres 18** — wymagana funkcja `uuidv7()`.
 - **DATABASE_URL** używa `127.0.0.1` zamiast `localhost` aby uniknąć niejednoznaczności socketu Unix.
 
 ---
 
 ## Testowanie
 
-Testy jednostkowe znajdują się w podfolderach każdego serwisu, obok testowanego kodu:
+Testy jednostkowe w podfolderach każdego serwisu:
 
 | Serwis | Pliki testowe |
 |---|---|
@@ -136,10 +139,8 @@ Testy jednostkowe znajdują się w podfolderach każdego serwisu, obok testowane
 | BACS | `bacs-service/pkg/standard18/parser_test.go` |
 |      | `bacs-service/pkg/server/server_test.go` |
 
-Uruchomienie wszystkich testów w serwisie:
-
 ```bash
 cd {service} && go test ./...
 ```
 
-Integracyjny smoke test (`test/integration_test.sh`) uruchamia bazy przez `compose-dev.yml`, buduje serwisy i testuje HTTP + SSE.
+Integracyjny smoke test (`test/integration_test.sh`) — uruchamia bazy przez `compose-dev.yml`, buduje serwisy na hoście, testuje HTTP.

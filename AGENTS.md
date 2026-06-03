@@ -163,7 +163,7 @@ A trigger on `journal_entries` fires `pg_notify('liquidity_event', account_bic)`
 - Static link libxml2 with CGO
 - Port 8080
 - DB runs in separate container (Postgres 18-alpine)
-- `compose.yml` for production, `compose-dev.yml` for dev (DB only)
+- `compose.yml` — full stack (apps + DBs), `compose-dev.yml` — DBs only (for local hot-reload)
 
 ### Testing
 - Test files exist for ISO 8583 parser, ISO 20022 serialization, and Standard 18 parser:
@@ -219,15 +219,16 @@ The tick interval is a trade-off: shorter = more responsive but more DB queries;
 
 ```
 config/sessions.json
-├── mode               "demo" or "production" — explicit switch
 ├── demo_session_minutes  Accelerated time window (e.g. 15 min = 15s tick)
+│   > 0: demo mode (accelerated ticks, capped durations)
+│   = 0 / absent: production mode (60s tick, wall-clock times)
 ├── FPS-specific
 │   ├── settlement_times    Wall-clock settlement windows (e.g. 09:00, 15:00)
 │   └── opening/closing_time  Enforced — ProcessPayment and handleISO8583TCP reject outside window
 ├── BACS-specific
 │   ├── processing_duration_minutes  How long until OPEN→PROCESSING (capped to demo_session_minutes in demo)
 │   ├── settlement_duration_minutes  Additional time until PROCESSING→SETTLED (capped to demo_session_minutes in demo)
-│   └── input_cutoff                 Display only
+│   └── input_cutoff                 Enforced — handleSubmit rejects after this time
 └── CHAPS-specific
     └── opening_time / interbank_cutoff
 ```
@@ -247,29 +248,29 @@ Operating hours are enforced at the handler level:
 
 #### Mode switching
 
-Set `"mode": "demo"` or `"mode": "production"` per service in `sessions.json`:
+Tryb sterowany jest wyłącznie przez `demo_session_minutes` — pole `mode` w `sessions.json` istnieje tylko jako dokumentacja, kod Go go nie czyta.
 
 ```json
 "fps": {
-    "mode": "production",
-    "demo_session_minutes": 0,
+    "demo_session_minutes": 15,
     "settlement_times": ["03:00", "09:00", "15:00"],
     ...
 }
 ```
 
-- **demo**: tick interval = `min(demo_session_minutes, 60)s`, cycle durations capped to `demo_session_minutes`, DNS cycles close every `demo_session_minutes`
-- **production**: tick interval = 60s, uses real config durations (1440 min for BACS cycles), uses wall-clock `settlement_times` for FPS DNS
+- **demo** (`demo_session_minutes > 0`): tick interval = `min(demo_session_minutes, 60)s`, cycle durations capped to `demo_session_minutes`, DNS cycles close every `demo_session_minutes`
+- **production** (`demo_session_minutes = 0` lub brak): tick interval = 60s, uses real config durations (1440 min for BACS cycles), uses wall-clock `settlement_times` for FPS DNS
+
+Operating hours are **always** enforced relative to wall-clock time regardless of mode.
 
 #### Config field status
 
 | Field | Service | Status |
 |---|---|---|
-| `mode` | all | ✅ Drives tick interval & duration scaling |
-| `demo_session_minutes` | all | ✅ Tick interval & DNS cycle window |
-| `settlement_times` | FPS | ✅ Next-cycle scheduling via `nextSettlementTime()` |
-| `processing_duration_minutes` | BACS | ✅ Drives `AdvanceCycles` + `CloseInputDay` |
-| `settlement_duration_minutes` | BACS | ✅ Drives `AdvanceCycles` + `CloseInputDay` |
+| `demo_session_minutes` | all | ✅ >0 = demo mode (accelerated ticks & durations), 0/absent = production |
+| `settlement_times` | FPS | ✅ Next-cycle scheduling via `nextSettlementTime()` (used only when `demo_session_minutes = 0`) |
+| `processing_duration_minutes` | BACS | ✅ Drives `AdvanceCycles` + `CloseInputDay` (capped to `demo_session_minutes` in demo) |
+| `settlement_duration_minutes` | BACS | ✅ Drives `AdvanceCycles` + `CloseInputDay` (capped to `demo_session_minutes` in demo) |
 | `opening_time` | FPS, CHAPS | ✅ Gates payment processing via `checkOperatingHours` / `checkCHAPSHours` |
 | `closing_time` | FPS | ✅ Gates payment processing via `checkOperatingHours` |
 | `interbank_cutoff` | CHAPS | ✅ Gates payment processing via `checkCHAPSHours` |
