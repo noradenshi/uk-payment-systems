@@ -56,6 +56,9 @@ func main() {
 		Events:    events.NewEventBus(),
 	}
 
+	schedCtx, schedCancel := context.WithCancel(context.Background())
+	go srv.StartScheduler(schedCtx)
+
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)
 
@@ -75,6 +78,8 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	log.Println("Shutting down CHAPS service...")
+
+	schedCancel()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -863,6 +864,28 @@ func (s *LedgerService) UpdateOverdraftLimit(ctx context.Context, bic string, li
 		SET overdraft_limit=$1, updated_at=NOW()
 		WHERE bic_code=$2`, limit, bic)
 	return err
+}
+
+// ── Scheduler ──
+
+func (s *LedgerService) AdvanceCycles(ctx context.Context) error {
+	var hasWork bool
+	if err := s.Pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM bacs_cycles WHERE status='OPEN' AND processing_date <= CURRENT_DATE)").Scan(&hasWork); err == nil && hasWork {
+		if err := s.CloseInputDay(ctx); err != nil {
+			log.Printf("AdvanceCycles CloseInputDay: %v", err)
+		}
+	}
+	if err := s.Pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM bacs_cycles WHERE status='PROCESSING' AND settlement_date <= CURRENT_DATE)").Scan(&hasWork); err == nil && hasWork {
+		if err := s.ProcessCycle(ctx); err != nil {
+			log.Printf("AdvanceCycles ProcessCycle: %v", err)
+		}
+	}
+	if err := s.Pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM bacs_cycles WHERE status='AWAITING_SETTLEMENT' AND settlement_date <= CURRENT_DATE)").Scan(&hasWork); err == nil && hasWork {
+		if _, err := s.SettleCycle(ctx); err != nil {
+			log.Printf("AdvanceCycles SettleCycle: %v", err)
+		}
+	}
+	return nil
 }
 
 // ── Schedule ──

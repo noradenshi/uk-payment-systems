@@ -1,12 +1,16 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"chaps-service/pkg/events"
 )
 
 func TestValidateBIC_Valid(t *testing.T) {
@@ -247,5 +251,23 @@ func TestHandleRegisterRequest_WithoutSortCode(t *testing.T) {
 	}
 	if req.SortCode != "" {
 		t.Errorf("expected empty SortCode, got %q", req.SortCode)
+	}
+}
+
+func TestStartScheduler_StopsOnCancel(t *testing.T) {
+	s := &Server{Ledger: nil, Events: events.NewEventBus()}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		s.StartScheduler(ctx)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("scheduler did not stop after context cancellation")
 	}
 }

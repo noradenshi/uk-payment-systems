@@ -3,6 +3,7 @@ package ledger
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -558,4 +559,96 @@ func (s *LedgerService) GetPaymentDetails(ctx context.Context, msgID string) (ma
 func (s *LedgerService) RecallPayment(ctx context.Context, msgID string) (bool, error) {
 	tag, err := s.Pool.Exec(ctx, "UPDATE fps_transactions SET status='REJECTED' WHERE msg_id=$1 AND status='PENDING'", msgID)
 	return tag.RowsAffected() > 0, err
+}
+
+func (s *LedgerService) ExecuteForwardDated(ctx context.Context) error {
+	rows, err := s.Pool.Query(ctx, `SELECT id::text, msg_id, sender_bic, receiver_bic, amount FROM fps_forward_dated WHERE status='SCHEDULED' AND execution_date <= CURRENT_DATE LIMIT 50`)
+	if err != nil {
+		return fmt.Errorf("query forward-dated: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, msgID, sender, receiver string
+		var amount float64
+		if err := rows.Scan(&id, &msgID, &sender, &receiver, &amount); err != nil {
+			log.Printf("ExecuteForwardDated scan: %v", err)
+			continue
+		}
+		result, err := s.SettleSIP(ctx, msgID, sender, receiver, amount, msgID, "", "")
+		if err != nil {
+			log.Printf("ExecuteForwardDated settle %s: %v", msgID, err)
+			s.Pool.Exec(ctx, "UPDATE fps_forward_dated SET status='FAILED' WHERE id=$1::uuid", id)
+			continue
+		}
+		newStatus := "EXECUTED"
+		if result.Status == "RJCT" {
+			newStatus = "FAILED"
+		} else if result.Status == "PDNG" {
+			newStatus = "QUEUED"
+		}
+		s.Pool.Exec(ctx, "UPDATE fps_forward_dated SET status=$1 WHERE id=$2::uuid", newStatus, id)
+	}
+	return rows.Err()
+}
+
+func (s *LedgerService) ExecuteStandingOrders(ctx context.Context) error {
+	rows, err := s.Pool.Query(ctx, `SELECT id::text, reference, sender_bic, receiver_bic, amount, frequency, next_date FROM fps_standing_orders WHERE status='ACTIVE' AND next_date <= CURRENT_DATE LIMIT 50`)
+	if err != nil {
+		return fmt.Errorf("query standing orders: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, ref, sender, receiver, freq string
+		var amount float64
+		var nextDate time.Time
+		if err := rows.Scan(&id, &ref, &sender, &receiver, &amount, &freq, &nextDate); err != nil {
+			log.Printf("ExecuteStandingOrders scan: %v", err)
+			continue
+		}
+		msgID := fmt.Sprintf("STO-%s-%s", ref, nextDate.Format("20060102"))
+		result, err := s.SettleSIP(ctx, msgID, sender, receiver, amount, msgID, "", "")
+		if err != nil {
+			log.Printf("ExecuteStandingOrders settle %s: %v", msgID, err)
+			continue
+		}
+		if result.Status == "RJCT" {
+			log.Printf("ExecuteStandingOrders %s rejected, cancelling standing order", ref)
+			s.Pool.Exec(ctx, "UPDATE fps_standing_orders SET status='CANCELLED' WHERE id=$1::uuid", id)
+			continue
+		}
+		var newNext time.Time
+		switch freq {
+		case "DAILY":
+			newNext = nextDate.AddDate(0, 0, 1)
+		case "WEEKLY":
+			newNext = nextDate.AddDate(0, 0, 7)
+		case "MONTHLY":
+			newNext = nextDate.AddDate(0, 1, 0)
+		case "YEARLY":
+			newNext = nextDate.AddDate(1, 0, 0)
+		default:
+			newNext = nextDate.AddDate(0, 1, 0)
+		}
+		s.Pool.Exec(ctx, "UPDATE fps_standing_orders SET next_date=$1 WHERE id=$2::uuid", newNext, id)
+	}
+	return rows.Err()
+}
+
+func (s *LedgerService) CloseExpiredDNSCycles(ctx context.Context) error {
+	rows, err := s.Pool.Query(ctx, `SELECT id FROM fps_dns_cycles WHERE status='OPEN' AND cycle_end <= NOW() LIMIT 10`)
+	if err != nil {
+		return fmt.Errorf("query expired cycles: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			log.Printf("CloseExpiredDNSCycles scan: %v", err)
+			continue
+		}
+		if _, err := s.CloseDNSCycle(ctx); err != nil {
+			log.Printf("CloseExpiredDNSCycles close %d: %v", id, err)
+		}
+	}
+	return rows.Err()
 }

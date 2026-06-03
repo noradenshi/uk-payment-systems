@@ -41,6 +41,9 @@ func main() {
 		Events: events.NewEventBus(),
 	}
 
+	schedCtx, schedCancel := context.WithCancel(context.Background())
+	go srv.StartScheduler(schedCtx)
+
 	isoPort := os.Getenv("ISO8583_PORT")
 	if isoPort == "" {
 		isoPort = ":7421"
@@ -73,6 +76,7 @@ func main() {
 	<-quit
 	log.Println("Shutting down FPS service...")
 
+	schedCancel()
 	isoCancel()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

@@ -195,6 +195,21 @@ All three services support server-sent events for real-time payment notification
 - Buffered channels (100 events), drops on overflow
 - Client disconnect detected via `r.Context().Done()`
 
+### Automated background processing (scheduler)
+
+All three services run a background scheduler that performs periodic work without manual API calls. Driven by `config/sessions.json`.
+
+| Service | Scheduler File | Interval (demo) | Tasks |
+|---|---|---|---|
+| FPS | `pkg/server/scheduler.go` | `demo_session_minutes` s (default 60s) | Execute forward-dated payments, execute standing orders, close expired DNS cycles |
+| BACS | `pkg/server/scheduler.go` | `demo_session_minutes` s (default 60s) | Advance cycles: OPEN→PROCESSING→AWAITING_SETTLEMENT→SETTLED when dates elapse |
+| CHAPS | `pkg/server/scheduler.go` | `demo_session_minutes` s (default 60s) | Enforce real-time liquidity blocks (suspend participants with 2h+ breaches) |
+
+- Config is loaded via `loadGlobalSchedule()` from `sessions.json`, `UKPS_CONFIG_PATH` env var, or relative paths
+- Tick interval = `min(demo_session_minutes, 60)` seconds when `demo_session_minutes > 0`, otherwise 60s
+- Scheduler starts in `main.go` via `srv.StartScheduler(schedCtx)` and stops cleanly on SIGINT/SIGTERM via context cancellation
+- All scheduler tasks log on failure but never crash the service (errors are non-fatal)
+
 ### Git conventions
 - `.gitignore` ignores `node_modules/`, `dist/`, `.vite/`, `*.log`, `.env`
 - No `Thumbs.db`, `.DS_Store`, `.vscode/`

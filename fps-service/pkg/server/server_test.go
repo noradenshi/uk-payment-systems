@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"net"
@@ -192,5 +193,23 @@ func TestHandleISO8583TCP_MissingFields(t *testing.T) {
 	_, err := clientConn.Read(buf)
 	if err == nil {
 		t.Fatal("expected error (connection closed) for missing required fields")
+	}
+}
+
+func TestStartScheduler_StopsOnCancel(t *testing.T) {
+	s := &Server{Ledger: nil, Events: events.NewEventBus()}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		s.StartScheduler(ctx)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("scheduler did not stop after context cancellation")
 	}
 }
