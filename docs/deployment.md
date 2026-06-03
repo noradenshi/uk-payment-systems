@@ -32,9 +32,6 @@ Tryb pracy (demo/production) sterowany jest przez `demo_session_minutes` w `conf
 ```bash
 # Uruchom wszystkie serwisy + bazy (z rebuildem)
 docker compose up --build -d
-
-# Uruchom tylko bazy (serwisy na hoście z hot-reload)
-docker compose -f compose-dev.yml up -d
 ```
 
 Po `up --build -d`:
@@ -67,17 +64,6 @@ docker compose down
 # Pełny reset (usuwa volumes)
 docker compose down -v
 ```
-
-### Development (hot-reload)
-
-Serwisy uruchomione lokalnie (poza Dockerem) łączą się do baz z `compose-dev.yml`:
-
-```bash
-docker compose -f compose-dev.yml up -d
-cd chaps-service && go run ./cmd/server/main.go
-```
-
-Domyślne `DATABASE_URL` w `main.go` używają `127.0.0.1` i portów 5432/5433/5434 — pasują do `compose-dev.yml`.
 
 ---
 

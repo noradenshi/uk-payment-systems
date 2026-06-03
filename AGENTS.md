@@ -314,14 +314,11 @@ Scheduler starts in `main.go` via `srv.StartScheduler(schedCtx)` and stops clean
 │   Batch / 3-day    │     │   Near-real-time    │     │   RTGS / High-val  │
 └────────┬───────────┘     └────────┬────────────┘     └────────┬───────────┘
          │                          │                          │
-         └──────────────────────────┼──────────────────────────┘
-                                    │
-                     ┌───────────────▼────────────────┐
-                     │      PostgreSQL 18 x3          │
-                     │  (separate databases:          │
-                     │   chaps_ledger, fps_ledger,    │
-                     │   bacs_ledger)                 │
-                     └────────────────────────────────┘
+         ▼                          ▼                          ▼
+┌──────────────┐          ┌──────────────┐          ┌──────────────┐
+│ Postgres 18  │          │ Postgres 18  │          │ Postgres 18  │
+│ bacs_ledger  │          │ fps_ledger   │          │ chaps_ledger │
+└──────────────┘          └──────────────┘          └──────────────┘
 ```
 
 Each service is an independent Go binary + optional React GUI, deployable together via Docker Compose. Each service runs its own PostgreSQL database with its own participant tables, transaction tables, and audit trail — no shared infrastructure. All three follow the same normalized schema pattern (participants split across 3 tables).
