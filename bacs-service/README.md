@@ -51,6 +51,9 @@ Day 3 (Settlement):  Net amounts are debited/credited. Funds available by 07:00.
 | **GET** | `/v1/payments/bacs/cycle/{cycle-date}` | Get a specific settlement cycle (e.g. `/cycle/2026-05-20`). | Done |
 | **GET** | `/v1/payments/bacs/cycle` | List past cycles (recent 30 days). | Done |
 | **POST** | `/v1/payments/bacs/cycle/close` | **Operator only**: force-close input day and lock further submissions for this cycle. | Done |
+| **POST** | `/v1/payments/bacs/cycle/process` | **Operator only**: advance cycle from PROCESSING to AWAITING_SETTLEMENT. | Done |
+| **POST** | `/v1/payments/bacs/cycle/settle` | **Operator only**: settle all net positions and finalise the cycle. | Done |
+| **GET** | `/v1/payments/bacs/incoming/{bic}` | SSE real-time stream of cycle settlement notifications (`cycle.settled` events). | Done |
 
 ### Service User Management
 
@@ -224,7 +227,8 @@ bacs-service/
 ├── internal/db/
 │   ├── 01_init.sql               # Full schema: 10 tables, custom enums
 │   └── 02_seed.sql               # 4 banks + open cycle
-├── pkg/server/server.go          # 24 endpoints, JSON + text/plain dispatch
+├── pkg/server/server.go          # 27 endpoints, JSON + text/plain dispatch, SSE streaming
+├── pkg/events/events.go          # In-memory EventBus for SSE real-time notifications
 ├── pkg/ledger/service.go         # Batch settlement, netting, cycles, mandates, reports
 ├── pkg/standard18/
 │   ├── parser.go                 # Standard 18 fixed-width parser (178 lines)

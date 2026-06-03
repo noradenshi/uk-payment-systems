@@ -36,6 +36,7 @@ CHAPS processes **high-value** payments in **real-time gross settlement (RTGS)**
 | **DELETE** | `/v1/payments/chaps/{id}` | Cancel a payment — only allowed when status is `PENDING`. | Done |
 | **POST** | `/v1/payments/chaps/{id}/amend` | Amend non-financial details of a pending payment. | Done |
 | **GET** | `/v1/payments/chaps/limits` | Retrieve current clearing limits and remaining intraday liquidity (optionally per BIC). | Done |
+| **GET** | `/v1/payments/chaps/incoming/{bic}` | SSE real-time stream of incoming payment notifications (`payment.received` events). | Done |
 
 ### Participant Management
 
@@ -280,7 +281,8 @@ chaps-service/
 ├── internal/db/
 │   ├── 01_init.sql               # Schema: 5 tables, custom enums, journal trigger
 │   └── 02_seed.sql               # Seed data: 4 banks with balances
-├── pkg/server/server.go          # HTTP router + 17 handlers, JSON/XML dispatch
+├── pkg/server/server.go          # HTTP router + 18 handlers, JSON/XML dispatch, SSE streaming
+├── pkg/events/events.go          # In-memory EventBus for SSE real-time notifications
 ├── pkg/ledger/service.go         # Settlement engine, participant management, positions, limits
 ├── pkg/iso20022/
 │   ├── bah.go                    # Business Application Header (AppHdr) struct + constructor
@@ -291,7 +293,7 @@ chaps-service/
 │   ├── service.go                # Settlement engine, participant management, positions, limits
 │   └── service_test.go           # 9 tests: sentinels, constants, types
 ├── pkg/server/
-│   ├── server.go                 # HTTP router + 17 handlers, JSON/XML dispatch
+│   ├── server.go                 # HTTP router + 18 handlers, JSON/XML dispatch, SSE streaming
 │   └── server_test.go            # 9 tests: BIC validation, HTTP helpers, CORS, routes
 ├── pkg/validator/validator.go    # XSD schema registry, envelope validation, XPath extraction
 ├── xsd/

@@ -90,6 +90,12 @@ FPS (Faster Payments Service) processes near-real-time low-value payments 24/7. 
 | **GET** | `/v1/payments/fps/limits` | FPS-specific limits (max single payment, daily cumulative, participant cap). | Done |
 | **PATCH** | `/v1/payments/fps/limits/{bic}` | Update per-participant FPS limits. | Done |
 
+### Notifications
+
+| Method | Endpoint | Description | Status |
+| :--- | :--- | :--- | :--- |
+| **GET** | `/v1/payments/fps/incoming/{bic}` | SSE real-time stream of incoming payment notifications (`payment.received` events). | Done |
+
 ### System Metadata
 
 | Method | Endpoint | Description | Status |
@@ -261,7 +267,8 @@ fps-service/
 ├── internal/db/
 │   ├── 01_init.sql             # Full schema: 9 tables, custom enums
 │   └── 02_seed.sql             # 4 banks + open DNS cycle
-├── pkg/server/server.go        # 31 endpoints, JSON/XML/ISO 8583 dispatch
+├── pkg/server/server.go        # 32 endpoints, JSON/XML/ISO 8583 dispatch, SSE streaming
+├── pkg/events/events.go        # In-memory EventBus for SSE real-time notifications
 ├── pkg/ledger/service.go       # SIP settlement, DNS, limits, gridlock
 ├── pkg/iso20022/
 │   ├── bah.go                  # Business Application Header
