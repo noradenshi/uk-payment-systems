@@ -1,5 +1,7 @@
 # FPS Service — Faster Payments
 
+> 📖 Dokumentacja integracyjna: [docs/fps/integration/INFO.md](../docs/fps/integration/INFO.md)
+
 ## Overview
 
 FPS (Faster Payments Service) processes near-real-time low-value payments 24/7. It supports dual-format messaging: **ISO 20022** (XML, modern) and **ISO 8583** (binary, legacy). Settlement is deferred net settlement (DNS) with optional prefunding for direct participants.

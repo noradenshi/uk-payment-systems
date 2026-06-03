@@ -1,5 +1,7 @@
 # CHAPS Service — Clearing House Automated Payment System
 
+> 📖 Dokumentacja integracyjna: [docs/chaps/integration/INFO.md](../docs/chaps/integration/INFO.md)
+
 ## Overview
 
 CHAPS processes **high-value** payments in **real-time gross settlement (RTGS)**. Each payment settles individually and irrevocably across Bank of England settlement accounts. It uses **ISO 20022** messaging (pacs.008 for payment, pacs.002 for status) and operates during UK business hours only.

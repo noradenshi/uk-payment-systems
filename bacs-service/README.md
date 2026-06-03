@@ -1,5 +1,7 @@
 # BACS Service — Bankers Automated Clearing Services
 
+> 📖 Dokumentacja integracyjna: [docs/bacs/integration/INFO.md](../docs/bacs/integration/INFO.md)
+
 ## Overview
 
 BACS processes **batch** low-value payments on a **3-day settlement cycle**. It uses the **Standard 18** fixed-width format for file submission via BACSTEL-IP. Unlike CHAPS (RTGS) and FPS (near-real-time), BACS is store-and-forward: files are submitted, validated, processed overnight, and settled on day 3.
