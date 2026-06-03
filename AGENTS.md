@@ -228,7 +228,7 @@ config/sessions.json
 │   ├── settlement_duration_minutes  Additional time until PROCESSING→SETTLED (capped to demo_session_minutes in demo)
 │   └── input_cutoff                 Display only
 └── CHAPS-specific
-    └── opening_time/customer_cutoff/interbank_cutoff  Display only
+    └── opening_time / interbank_cutoff
 ```
 
 | Service | Tick Interval | What it does each tick | Duration source |
@@ -271,7 +271,6 @@ Set `"mode": "demo"` or `"mode": "production"` per service in `sessions.json`:
 | `settlement_duration_minutes` | BACS | ✅ Drives `AdvanceCycles` + `CloseInputDay` |
 | `opening_time` | FPS, CHAPS | ✅ Gates payment processing via `checkOperatingHours` / `checkCHAPSHours` |
 | `closing_time` | FPS | ✅ Gates payment processing via `checkOperatingHours` |
-| `customer_cutoff` | CHAPS | ℹ️ Informational — enforced by participant banks, not the central system |
 | `interbank_cutoff` | CHAPS | ✅ Gates payment processing via `checkCHAPSHours` |
 | `input_cutoff` | BACS | ✅ Gates file submissions via `checkInputCutoff` |
 

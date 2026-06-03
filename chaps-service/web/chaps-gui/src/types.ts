@@ -35,7 +35,6 @@ export type Limits = {
 export type Schedule = {
   date: string;
   opening_time: string;
-  customer_cutoff: string;
   interbank_cutoff: string;
   timezone: string;
 };
