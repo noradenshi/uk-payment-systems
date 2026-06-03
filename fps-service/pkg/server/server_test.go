@@ -1,10 +1,15 @@
 package server
 
 import (
+	"encoding/binary"
 	"encoding/json"
+	"net"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"fps-service/pkg/events"
 )
 
 func TestProcessJSONPaymentRequest_WithSortCodes(t *testing.T) {
@@ -100,5 +105,92 @@ func TestHandleRegisterRequest_WithoutSortCode(t *testing.T) {
 	}
 	if req.SortCode != "" {
 		t.Errorf("expected empty SortCode, got %q", req.SortCode)
+	}
+}
+
+// buildISO8583Msg builds a raw 0200 message with the given bitmap fields.
+// The message includes only the fields enabled in the bitmap, in field order.
+func buildISO8583Msg(fields ...int) []byte {
+	var buf []byte
+	buf = append(buf, []byte("0200")...)
+
+	primBmp := uint64(0)
+	secBmp := uint64(0)
+	hasSec := false
+	for _, f := range fields {
+		if f <= 64 {
+			primBmp |= 1 << (64 - f)
+		} else if f <= 128 {
+			primBmp |= 1 << 63
+			secBmp |= 1 << (128 - f)
+			hasSec = true
+		}
+	}
+	for i := 7; i >= 0; i-- {
+		buf = append(buf, byte((primBmp>>(i*8))&0xFF))
+	}
+	if hasSec {
+		for i := 7; i >= 0; i-- {
+			buf = append(buf, byte((secBmp>>(i*8))&0xFF))
+		}
+	}
+	return buf
+}
+
+func TestHandleISO8583TCP_InvalidMTI(t *testing.T) {
+	s := &Server{Ledger: nil, Events: events.NewEventBus()}
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	go s.handleISO8583TCP(serverConn)
+
+	body := []byte("0100")
+	binary.Write(clientConn, binary.BigEndian, uint16(len(body)))
+	clientConn.Write(body)
+
+	clientConn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	buf := make([]byte, 4)
+	_, err := clientConn.Read(buf)
+	if err == nil {
+		t.Fatal("expected error (connection closed) for invalid MTI")
+	}
+}
+
+func TestHandleISO8583TCP_MessageTooLarge(t *testing.T) {
+	s := &Server{Ledger: nil, Events: events.NewEventBus()}
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	go s.handleISO8583TCP(serverConn)
+
+	binary.Write(clientConn, binary.BigEndian, uint16(5000))
+
+	clientConn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	buf := make([]byte, 4)
+	_, err := clientConn.Read(buf)
+	if err == nil {
+		t.Fatal("expected error (connection closed) for oversized message")
+	}
+}
+
+func TestHandleISO8583TCP_MissingFields(t *testing.T) {
+	s := &Server{Ledger: nil, Events: events.NewEventBus()}
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	go s.handleISO8583TCP(serverConn)
+
+	body := buildISO8583Msg()
+	binary.Write(clientConn, binary.BigEndian, uint16(len(body)))
+	clientConn.Write(body)
+
+	clientConn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	buf := make([]byte, 4)
+	_, err := clientConn.Read(buf)
+	if err == nil {
+		t.Fatal("expected error (connection closed) for missing required fields")
 	}
 }

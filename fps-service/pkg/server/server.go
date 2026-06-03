@@ -1,11 +1,14 @@
 package server
 
 import (
+	"context"
+	"encoding/binary"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"regexp"
@@ -994,6 +997,113 @@ func (s *Server) handleISO8583Decode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, msg)
+}
+
+func (s *Server) handleISO8583TCP(conn net.Conn) {
+	defer conn.Close()
+
+	var length uint16
+	if err := binary.Read(conn, binary.BigEndian, &length); err != nil {
+		log.Printf("ISO8583 TCP: failed to read length: %v", err)
+		return
+	}
+
+	if length > 4096 {
+		log.Printf("ISO8583 TCP: message too large: %d", length)
+		return
+	}
+
+	body := make([]byte, length)
+	if _, err := io.ReadFull(conn, body); err != nil {
+		log.Printf("ISO8583 TCP: failed to read body: %v", err)
+		return
+	}
+
+	msg, err := iso8583.ParseISO8583(body)
+	if err != nil {
+		log.Printf("ISO8583 TCP: parse error: %v", err)
+		return
+	}
+
+	if msg.DE32_Acquirer == "" || msg.DE100_Receiver == "" || msg.DE4_Amount <= 0 {
+		log.Printf("ISO8583 TCP: missing required fields")
+		return
+	}
+
+	amount := float64(msg.DE4_Amount) / 100.0
+	msgID := fmt.Sprintf("ISO8583-%s-%06d", time.Now().Format("20060102"), msg.DE11_Trace)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	res, err := s.Ledger.SettleSIP(ctx, msgID, msg.DE32_Acquirer, msg.DE100_Receiver, amount, msgID, "", "")
+	if err != nil {
+		log.Printf("ISO8583 TCP: ledger failure: %v", err)
+		return
+	}
+
+	if res.Status == "ACTC" {
+		s.Events.Publish(msg.DE100_Receiver, events.Event{
+			Type: "payment.received",
+			Data: map[string]interface{}{
+				"msg_id":   msgID,
+				"sender":   msg.DE32_Acquirer,
+				"receiver": msg.DE100_Receiver,
+				"amount":   amount,
+				"status":   "SETTLED",
+				"scheme":   "FPS",
+			},
+		})
+	}
+
+	respCode := "00"
+	if res.Status == "RJCT" {
+		respCode = "57"
+	} else if res.Status == "PDNG" {
+		respCode = "51"
+	}
+
+	resp := &iso8583.Message0210{
+		DE39_RespCode: respCode,
+		DE4_Amount:    msg.DE4_Amount,
+		DE11_Trace:    msg.DE11_Trace,
+		DE32_Acquirer: msg.DE32_Acquirer,
+		DE100_Receiver: msg.DE100_Receiver,
+	}
+
+	encoded := resp.Encode()
+	binary.Write(conn, binary.BigEndian, uint16(len(encoded)))
+	if _, err := conn.Write(encoded); err != nil {
+		log.Printf("ISO8583 TCP: failed to write response: %v", err)
+	}
+
+	log.Printf("ISO8583 TCP trace=%d amount=%.2f %s->%s status=%s code=%s", msg.DE11_Trace, amount, msg.DE32_Acquirer, msg.DE100_Receiver, res.Status, respCode)
+}
+
+func (s *Server) StartISO8583Socket(ctx context.Context, addr string) error {
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("ISO8583 socket listen: %w", err)
+	}
+
+	go func() {
+		<-ctx.Done()
+		listener.Close()
+	}()
+
+	log.Printf("ISO8583 TCP socket listening on %s", addr)
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			log.Printf("ISO8583 TCP accept error: %v", err)
+			continue
+		}
+		go s.handleISO8583TCP(conn)
+	}
 }
 
 func (s *Server) sendXMLReject(w http.ResponseWriter, reason string, detail string) {

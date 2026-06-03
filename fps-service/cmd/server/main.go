@@ -41,6 +41,18 @@ func main() {
 		Events: events.NewEventBus(),
 	}
 
+	isoPort := os.Getenv("ISO8583_PORT")
+	if isoPort == "" {
+		isoPort = ":8583"
+	}
+
+	isoCtx, isoCancel := context.WithCancel(context.Background())
+	go func() {
+		if err := srv.StartISO8583Socket(isoCtx, isoPort); err != nil {
+			log.Printf("ISO8583 socket error: %v", err)
+		}
+	}()
+
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)
 
@@ -50,7 +62,7 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("FPS service starting on :8081")
+		log.Printf("FPS service starting HTTP on :8081")
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server error: %v", err)
 		}
@@ -60,6 +72,8 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	log.Println("Shutting down FPS service...")
+
+	isoCancel()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

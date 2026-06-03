@@ -209,6 +209,34 @@ case "application/octet-stream":
     s.processISO8583Payment(w, r)
 ```
 
+### TCP Socket (realistic transport)
+
+In addition to the HTTP endpoint, the FPS service listens on a **raw TCP socket** for ISO 8583 messages, simulating a real payment switch connection.
+
+| Setting | Value |
+| :--- | :--- |
+| Default port | `8583` |
+| Config via | `ISO8583_PORT` env var (e.g. `:8583`) |
+| Framing | 2-byte big-endian length prefix, then the ISO 8583 binary message |
+| Response | 2-byte big-endian length prefix, then 0210 binary response |
+| Max message | 4096 bytes |
+
+**Protocol flow:**
+```
+Client                            Server (:8583)
+  │                                  │
+  ├── [2 bytes: uint16 length N] ───>│
+  ├── [N bytes: 0200 + bitmap + DEs]─>
+  │                                  ├── ParseISO8583
+  │                                  ├── Ledger.SettleSIP
+  │                                  ├── SSE event publish
+  │                                  │
+  │<── [2 bytes: uint16 length M] ───┤
+  │<── [M bytes: 0210 + bitmap + DEs]─┤
+```
+
+Each connection handles one request-response exchange and closes. Goroutine-per-connection with a 10-second ledger timeout.
+
 ---
 
 ## Settlement: DNS (Deferred Net Settlement)
