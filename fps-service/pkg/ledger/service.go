@@ -634,7 +634,7 @@ func (s *LedgerService) ExecuteStandingOrders(ctx context.Context) error {
 	return rows.Err()
 }
 
-func (s *LedgerService) CloseExpiredDNSCycles(ctx context.Context) error {
+func (s *LedgerService) CloseExpiredDNSCycles(ctx context.Context, nextCycleEnd time.Time) error {
 	rows, err := s.Pool.Query(ctx, `SELECT id FROM fps_dns_cycles WHERE status='OPEN' AND cycle_end <= NOW() LIMIT 10`)
 	if err != nil {
 		return fmt.Errorf("query expired cycles: %w", err)
@@ -648,6 +648,10 @@ func (s *LedgerService) CloseExpiredDNSCycles(ctx context.Context) error {
 		}
 		if _, err := s.CloseDNSCycle(ctx); err != nil {
 			log.Printf("CloseExpiredDNSCycles close %d: %v", id, err)
+			continue
+		}
+		if _, err := s.Pool.Exec(ctx, "INSERT INTO fps_dns_cycles (cycle_start, cycle_end, status) VALUES (NOW(), $1, 'OPEN')", nextCycleEnd); err != nil {
+			log.Printf("CloseExpiredDNSCycles create new cycle: %v", err)
 		}
 	}
 	return rows.Err()
