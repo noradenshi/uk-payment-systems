@@ -265,6 +265,68 @@ Gorutyna per połączenie. Handler TCP używa tych samych `Ledger.SettleSIP` i `
 
 ---
 
+## Przykłady wywołań (JSON)
+
+### Rejestracja uczestnika
+```bash
+curl -X POST http://localhost:8421/v1/participants/register \
+  -H "Content-Type: application/json" \
+  -d '{"bic":"BARCGB2L","name":"Barclays Bank","sort_code":"20-00-00","balance":500000,"participant_type":"DIRECT"}'
+```
+```json
+{"bic":"BARCGB2L","status":"ACTIVE"}
+```
+
+### Płatność SIP — rozliczona
+```bash
+curl -X POST http://localhost:8421/v1/payments/fps \
+  -H "Content-Type: application/json" \
+  -d '{"msg_id":"FPS-001","end_to_end_id":"E2E-001","sender_bic":"SNDRUK22","receiver_bic":"BARCGB2L","amount":500}'
+```
+```json
+{"msg_id":"FPS-001","status":"SETTLED","iso_status":"ACTC","reason_code":""}
+```
+
+### Płatność SIP — brak płynności
+```bash
+curl -X POST http://localhost:8421/v1/payments/fps \
+  -H "Content-Type: application/json" \
+  -d '{"msg_id":"FPS-002","end_to_end_id":"E2E-002","sender_bic":"SNDRUK22","receiver_bic":"BARCGB2L","amount":999999}'
+```
+```json
+{"msg_id":"FPS-002","status":"QUEUED","iso_status":"PDNG","reason_code":"INSU"}
+```
+
+### Forward-dated payment
+```bash
+curl -X POST http://localhost:8421/v1/payments/fps/forward-dated \
+  -H "Content-Type: application/json" \
+  -d '{"msg_id":"FPS-FWD-001","sender_bic":"SNDRUK22","receiver_bic":"BARCGB2L","amount":250,"execution_date":"2026-06-10"}'
+```
+```json
+{"msg_id":"FPS-FWD-001","status":"SCHEDULED"}
+```
+
+### Standing order
+```bash
+curl -X POST http://localhost:8421/v1/payments/fps/standing-orders \
+  -H "Content-Type: application/json" \
+  -d '{"reference":"SO-001","sender_bic":"SNDRUK22","receiver_bic":"BARCGB2L","amount":100,"frequency":"WEEKLY","next_date":"2026-06-10","end_date":"2026-09-10"}'
+```
+```json
+{"reference":"SO-001","status":"ACTIVE"}
+```
+
+### Zamknięcie cyklu DNS
+```bash
+curl -X POST http://localhost:8421/v1/settlement/dns/close
+```
+```json
+{"status":"CLOSED","net_positions":[{"bic":"SNDRUK22","net":500.00},{"bic":"BARCGB2L","net":-500.00}]}
+```
+
+---
+
 ## Uczestnicy (seed)
 
 | BIC | Nazwa | Saldo prefundowane |

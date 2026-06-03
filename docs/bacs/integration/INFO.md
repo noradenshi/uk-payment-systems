@@ -251,6 +251,71 @@ ARUDD (Automated Return of Unpaid Direct Debits) obsługuje zwroty nieopłaconyc
 
 ---
 
+## Przykłady wywołań (JSON)
+
+### Rejestracja uczestnika
+```bash
+curl -X POST http://localhost:8422/v1/participants/register \
+  -H "Content-Type: application/json" \
+  -d '{"bic":"BARCGB2L","name":"Barclays Bank","balance":200000,"su_code":"SU123","is_service_user":true,"is_destination_user":true}'
+```
+```json
+{"bic":"BARCGB2L","name":"Barclays Bank","status":"ACTIVE"}
+```
+
+### Przesłanie pliku Standard 18
+```bash
+curl -X POST http://localhost:8422/v1/payments/bacs/submit \
+  -F "file=@payroll.txt"
+```
+```json
+{"id":"sub-uuid-v7","filename":"payroll.txt","volume":42,"value":12500.00,"status":"RECEIVED","cycle_id":"2026-06-03","su_bic":"BARCGB2L"}
+```
+
+### Utworzenie mandatu AUDDIS
+```bash
+curl -X POST http://localhost:8422/v1/payments/bacs/mandates \
+  -H "Content-Type: application/json" \
+  -d '{"reference":"MAND-001","su_bic":"BARCGB2L","payer_name":"John Doe","payer_sort_code":"20-00-00","payer_account":"12345678","amount":150.00,"frequency":"MONTHLY"}'
+```
+```json
+{"id":"mand-uuid-v7","reference":"MAND-001","status":"ACTIVE"}
+```
+
+### Zamknięcie input day
+```bash
+curl -X POST http://localhost:8422/v1/payments/bacs/cycle/close
+```
+```json
+{"status":"PROCESSING"}
+```
+
+### Przetworzenie cyklu
+```bash
+curl -X POST http://localhost:8422/v1/payments/bacs/cycle/process
+```
+```json
+{"status":"AWAITING_SETTLEMENT"}
+```
+
+### Rozliczenie cyklu
+```bash
+curl -X POST http://localhost:8422/v1/payments/bacs/cycle/settle
+```
+```json
+{"status":"SETTLED"}
+```
+
+### Recall zgłoszenia przed cut-off
+```bash
+curl -X DELETE http://localhost:8422/v1/payments/bacs/submit/sub-uuid-v7
+```
+```json
+{"id":"sub-uuid-v7","status":"RECALLED"}
+```
+
+---
+
 ## Uczestnicy (seed)
 
 | BIC | Nazwa | Rola |

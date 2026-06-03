@@ -262,6 +262,84 @@ data: {"type":"payment.received","data":{"msg_id":"...","sender":"SNDRUK22","rec
 
 ---
 
+## Przykłady wywołań (JSON)
+
+### Rejestracja uczestnika
+```bash
+curl -X POST http://localhost:8420/v1/participants/register \
+  -H "Content-Type: application/json" \
+  -d '{"bic":"BARCGB2L","name":"Barclays Bank","sort_code":"20-00-00","balance":1000000}'
+```
+```json
+{"bic":"BARCGB2L","status":"ACTIVE"}
+```
+
+### Płatność CHAPS — rozliczona
+```bash
+curl -X POST http://localhost:8420/v1/payments/chaps \
+  -H "Content-Type: application/json" \
+  -d '{"msg_id":"CHAPS-001","end_to_end_id":"E2E-001","sender_bic":"SNDRUK22","receiver_bic":"BARCGB2L","amount":500000}'
+```
+```json
+{"msg_id":"CHAPS-001","status":"SETTLED","iso_status":"ACTC","reason_code":""}
+```
+
+### Płatność CHAPS — brak płynności (kolejkowana)
+```bash
+curl -X POST http://localhost:8420/v1/payments/chaps \
+  -H "Content-Type: application/json" \
+  -d '{"msg_id":"CHAPS-002","end_to_end_id":"E2E-002","sender_bic":"SNDRUK22","receiver_bic":"BARCGB2L","amount":99999999}'
+```
+```json
+{"msg_id":"CHAPS-002","status":"QUEUED","iso_status":"PDNG","reason_code":"INSU"}
+```
+
+### Walidacja sucha
+```bash
+curl -X POST http://localhost:8420/v1/payments/chaps/validate \
+  -H "Content-Type: application/json" \
+  -d '{"sender_bic":"SNDRUK22","receiver_bic":"BARCGB2L","amount":500000}'
+```
+```json
+{"valid":true,"checks":["bic_format","participant_exists","participant_active","sender!=receiver","positive_amount","balance_sufficient"],"errors":[],"available":1000000}
+```
+
+### Zasilenie płynności
+```bash
+curl -X POST http://localhost:8420/v1/liquidity/top-up \
+  -H "Content-Type: application/json" \
+  -d '{"bic":"SNDRUK22","amount":5000000}'
+```
+```json
+{"bic":"SNDRUK22","status":"UPDATED"}
+```
+
+### Rozwiązanie gridlocka
+```bash
+curl -X POST http://localhost:8420/v1/payments/chaps/gridlock/resolve
+```
+```json
+{"status":"COMPLETED","settled":3}
+```
+
+### Szczegóły płatności
+```bash
+curl http://localhost:8420/v1/payments/chaps/CHAPS-001
+```
+```json
+{"msg_id":"CHAPS-001","sender_bic":"SNDRUK22","receiver_bic":"BARCGB2L","amount":500000,"status":"SETTLED","created_at":"2026-06-03T14:30:00Z"}
+```
+
+### Anulowanie płatności (PENDING lub QUEUED)
+```bash
+curl -X DELETE http://localhost:8420/v1/payments/chaps/CHAPS-002
+```
+```json
+{"msg_id":"CHAPS-002","status":"CANCELLED"}
+```
+
+---
+
 ## Uczestnicy (seed)
 
 | BIC | Nazwa | Saldo początkowe |
