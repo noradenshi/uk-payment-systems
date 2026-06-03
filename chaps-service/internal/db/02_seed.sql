@@ -2,16 +2,16 @@
 TRUNCATE participant_liquidity, participant_statuses, participant_profiles CASCADE;
 
 -- Seed Member Banks across the normalized schema
-WITH seed_data (bic, name, bal) AS (
+WITH seed_data (bic, name, sort_code, bal) AS (
     VALUES 
-        ('BARCGB2L', 'Barclays Bank', 1000000.00),
-        ('HSBCGB44', 'HSBC UK', 500000.00),
-        ('LLOYGB21', 'Lloyds Bank', 750000.00),
-        ('SNDRUK22', 'Alice Bank', 1000000.00)
+        ('BARCGB2L', 'Barclays Bank', '20-00-00', 1000000.00),
+        ('HSBCGB44', 'HSBC UK', '40-00-00', 500000.00),
+        ('LLOYGB21', 'Lloyds Bank', '30-00-00', 750000.00),
+        ('SNDRUK22', 'Alice Bank', '60-00-00', 1000000.00)
 ),
 ins_profiles AS (
-    INSERT INTO participant_profiles (bic_code, name)
-    SELECT bic, name FROM seed_data
+    INSERT INTO participant_profiles (bic_code, name, sort_code)
+    SELECT bic, name, sort_code FROM seed_data
     RETURNING bic_code
 ),
 ins_statuses AS (

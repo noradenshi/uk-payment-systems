@@ -57,6 +57,105 @@ func TestPacs008Unmarshal(t *testing.T) {
 	}
 }
 
+func TestPacs008Unmarshal_WithSortCodes(t *testing.T) {
+	xmlData := `<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.14">
+  <FIToFICstmrCdtTrf>
+    <GrpHdr>
+      <MsgId>CHAPS-SORT-001</MsgId>
+    </GrpHdr>
+    <CdtTrfTxInf>
+      <PmtId>
+        <EndToEndId>E2E-SORT</EndToEndId>
+      </PmtId>
+      <IntrBkSttlmAmt Ccy="GBP">1000.00</IntrBkSttlmAmt>
+      <DbtrAgt>
+        <FinInstnId>
+          <BICFI>SNDRUK22</BICFI>
+          <ClrSysMmbId>
+            <MmbId>60-00-00</MmbId>
+          </ClrSysMmbId>
+        </FinInstnId>
+      </DbtrAgt>
+      <CdtrAgt>
+        <FinInstnId>
+          <BICFI>HSBCGB44</BICFI>
+          <ClrSysMmbId>
+            <MmbId>40-00-00</MmbId>
+          </ClrSysMmbId>
+        </FinInstnId>
+      </CdtrAgt>
+    </CdtTrfTxInf>
+  </FIToFICstmrCdtTrf>
+</Document>`
+
+	var msg iso20022.Pacs008Message
+	if err := xml.Unmarshal([]byte(xmlData), &msg); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	if msg.MsgId != "CHAPS-SORT-001" {
+		t.Errorf("MsgId = %q, want %q", msg.MsgId, "CHAPS-SORT-001")
+	}
+	if msg.Sender != "SNDRUK22" {
+		t.Errorf("Sender = %q, want %q", msg.Sender, "SNDRUK22")
+	}
+	if msg.DestBIC != "HSBCGB44" {
+		t.Errorf("DestBIC = %q, want %q", msg.DestBIC, "HSBCGB44")
+	}
+	if msg.Amount != 1000.00 {
+		t.Errorf("Amount = %f, want %f", msg.Amount, 1000.00)
+	}
+	if msg.SenderSortCode != "60-00-00" {
+		t.Errorf("SenderSortCode = %q, want %q", msg.SenderSortCode, "60-00-00")
+	}
+	if msg.DestSortCode != "40-00-00" {
+		t.Errorf("DestSortCode = %q, want %q", msg.DestSortCode, "40-00-00")
+	}
+}
+
+func TestPacs008Unmarshal_WithoutSortCodes(t *testing.T) {
+	xmlData := `<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.14">
+  <FIToFICstmrCdtTrf>
+    <GrpHdr>
+      <MsgId>CHAPS-NO-SORT-001</MsgId>
+    </GrpHdr>
+    <CdtTrfTxInf>
+      <PmtId>
+        <EndToEndId>E2E-NOSORT</EndToEndId>
+      </PmtId>
+      <IntrBkSttlmAmt Ccy="GBP">500.00</IntrBkSttlmAmt>
+      <DbtrAgt>
+        <FinInstnId>
+          <BICFI>SNDRUK22</BICFI>
+        </FinInstnId>
+      </DbtrAgt>
+      <CdtrAgt>
+        <FinInstnId>
+          <BICFI>HSBCGB44</BICFI>
+        </FinInstnId>
+      </CdtrAgt>
+    </CdtTrfTxInf>
+  </FIToFICstmrCdtTrf>
+</Document>`
+
+	var msg iso20022.Pacs008Message
+	if err := xml.Unmarshal([]byte(xmlData), &msg); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	if msg.SenderSortCode != "" {
+		t.Errorf("expected empty SenderSortCode, got %q", msg.SenderSortCode)
+	}
+	if msg.DestSortCode != "" {
+		t.Errorf("expected empty DestSortCode, got %q", msg.DestSortCode)
+	}
+	if msg.Amount != 500.00 {
+		t.Errorf("Amount = %f, want %f", msg.Amount, 500.00)
+	}
+}
+
 func TestPacs008Unmarshal_EmptyFields(t *testing.T) {
 	xmlData := `<?xml version="1.0" encoding="UTF-8"?>
 <Document>

@@ -34,23 +34,26 @@ type SettlementResult struct {
 }
 
 type PaymentSummary struct {
-	MsgID       string    `json:"msg_id"`
-	SenderBIC   string    `json:"sender_bic"`
-	ReceiverBIC string    `json:"receiver_bic"`
-	Amount      float64   `json:"amount"`
-	Status      string    `json:"status"`
-	CreatedAt   time.Time `json:"created_at"`
+	MsgID           string    `json:"msg_id"`
+	SenderBIC       string    `json:"sender_bic"`
+	ReceiverBIC     string    `json:"receiver_bic"`
+	SenderSortCode  string    `json:"sender_sort_code,omitempty"`
+	ReceiverSortCode string   `json:"receiver_sort_code,omitempty"`
+	Amount          float64   `json:"amount"`
+	Status          string    `json:"status"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 type ParticipantSummary struct {
-	BIC         string  `json:"bic"`
-	Name        string  `json:"name"`
-	Status      string  `json:"status"`
-	Balance     float64 `json:"balance"`
-	Currency    string  `json:"currency"`
-	IsClosed    bool    `json:"is_closed"`
+	BIC           string  `json:"bic"`
+	Name          string  `json:"name"`
+	SortCode      string  `json:"sort_code,omitempty"`
+	Status        string  `json:"status"`
+	Balance       float64 `json:"balance"`
+	Currency      string  `json:"currency"`
+	IsClosed      bool    `json:"is_closed"`
 	OverdraftLimit float64 `json:"overdraft_limit"`
-	BlockReason *string `json:"block_reason,omitempty"`
+	BlockReason   *string `json:"block_reason,omitempty"`
 }
 
 type PaymentValidation struct {
@@ -98,7 +101,7 @@ func (s *LedgerService) UpdateParticipantStatus(ctx context.Context, bic string,
 func (s *LedgerService) ListParticipants(ctx context.Context) ([]ParticipantSummary, error) {
 	_ = s.EnforceRealtimeLiquidityBlocks(ctx)
 	rows, err := s.Pool.Query(ctx, `
-		SELECT p.bic_code, p.name, COALESCE(st.status::text, 'ACTIVE'), COALESCE(l.balance, 0), p.currency,
+		SELECT p.bic_code, p.name, COALESCE(p.sort_code, ''), COALESCE(st.status::text, 'ACTIVE'), COALESCE(l.balance, 0), p.currency,
 		       COALESCE(st.is_closed, false), COALESCE(st.overdraft_limit, 0), st.block_reason
 		FROM participant_profiles p
 		LEFT JOIN participant_statuses st ON st.bic_code = p.bic_code
@@ -112,7 +115,7 @@ func (s *LedgerService) ListParticipants(ctx context.Context) ([]ParticipantSumm
 	participants := []ParticipantSummary{}
 	for rows.Next() {
 		var p ParticipantSummary
-		if err := rows.Scan(&p.BIC, &p.Name, &p.Status, &p.Balance, &p.Currency, &p.IsClosed, &p.OverdraftLimit, &p.BlockReason); err != nil {
+		if err := rows.Scan(&p.BIC, &p.Name, &p.SortCode, &p.Status, &p.Balance, &p.Currency, &p.IsClosed, &p.OverdraftLimit, &p.BlockReason); err != nil {
 			return nil, err
 		}
 		participants = append(participants, p)
@@ -126,7 +129,7 @@ func (s *LedgerService) ListPayments(ctx context.Context, status string, limit i
 	}
 
 	query := `
-		SELECT msg_id, sender_bic, receiver_bic, amount, status::text, created_at
+		SELECT msg_id, sender_bic, receiver_bic, COALESCE(sender_sort_code, ''), COALESCE(receiver_sort_code, ''), amount, status::text, created_at
 		FROM transactions`
 	args := []any{}
 	if status != "" {
@@ -147,7 +150,7 @@ func (s *LedgerService) ListPayments(ctx context.Context, status string, limit i
 	payments := []PaymentSummary{}
 	for rows.Next() {
 		var p PaymentSummary
-		if err := rows.Scan(&p.MsgID, &p.SenderBIC, &p.ReceiverBIC, &p.Amount, &p.Status, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.MsgID, &p.SenderBIC, &p.ReceiverBIC, &p.SenderSortCode, &p.ReceiverSortCode, &p.Amount, &p.Status, &p.CreatedAt); err != nil {
 			return nil, err
 		}
 		payments = append(payments, p)
@@ -271,12 +274,13 @@ func (s *LedgerService) GetPaymentDetails(ctx context.Context, msgID string) (ma
 	var internalID pgtype.UUID
 	var senderBic string
 	var receiverBic string
+	var senderSortCode, receiverSortCode *string
 	var endToEndID *string
 	var createdAt time.Time
 
 	err := s.Pool.QueryRow(ctx,
-		"SELECT id, status, amount, sender_bic, receiver_bic, end_to_end_id, created_at FROM transactions WHERE msg_id = $1",
-		msgID).Scan(&internalID, &status, &amount, &senderBic, &receiverBic, &endToEndID, &createdAt)
+		"SELECT id, status, amount, sender_bic, receiver_bic, sender_sort_code, receiver_sort_code, end_to_end_id, created_at FROM transactions WHERE msg_id = $1",
+		msgID).Scan(&internalID, &status, &amount, &senderBic, &receiverBic, &senderSortCode, &receiverSortCode, &endToEndID, &createdAt)
 	if err != nil {
 		return nil, err
 	}
@@ -310,6 +314,12 @@ func (s *LedgerService) GetPaymentDetails(ctx context.Context, msgID string) (ma
 	details["sender_bic"] = senderBic
 	details["receiver_bic"] = receiverBic
 	details["created_at"] = createdAt
+	if senderSortCode != nil {
+		details["sender_sort_code"] = *senderSortCode
+	}
+	if receiverSortCode != nil {
+		details["receiver_sort_code"] = *receiverSortCode
+	}
 	if endToEndID != nil {
 		details["end_to_end_id"] = *endToEndID
 	}
@@ -318,9 +328,12 @@ func (s *LedgerService) GetPaymentDetails(ctx context.Context, msgID string) (ma
 	return details, nil
 }
 
-func (s *LedgerService) RegisterParticipant(ctx context.Context, bic, name string, initialBalance float64) error {
+func (s *LedgerService) RegisterParticipant(ctx context.Context, bic, name, sortCode string, initialBalance float64) error {
+	if sortCode == "" {
+		sortCode = ""
+	}
 	return pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, "INSERT INTO participant_profiles (bic_code, name) VALUES ($1, $2)", bic, name); err != nil {
+		if _, err := tx.Exec(ctx, "INSERT INTO participant_profiles (bic_code, name, sort_code) VALUES ($1, $2, NULLIF($3, ''))", bic, name, sortCode); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, "INSERT INTO participant_statuses (bic_code) VALUES ($1)", bic); err != nil {
@@ -384,7 +397,19 @@ func (s *LedgerService) checkDailyLimit(ctx context.Context, tx pgx.Tx, sender s
 	return nil
 }
 
-func (s *LedgerService) SettlePayment(ctx context.Context, msgID string, sender string, receiver string, amount float64, endToEndID string) (SettlementResult, error) {
+func (s *LedgerService) SettlePayment(ctx context.Context, msgID string, sender string, receiver string, amount float64, endToEndID string, senderSortCode, receiverSortCode string) (SettlementResult, error) {
+	result, err := s.settlePaymentOnce(ctx, msgID, sender, receiver, amount, endToEndID, senderSortCode, receiverSortCode)
+	if err != nil {
+		return result, err
+	}
+	if result.Status == "PDNG" {
+		s.ResolveGridlock(ctx)
+		result, err = s.settlePaymentOnce(ctx, msgID, sender, receiver, amount, endToEndID, senderSortCode, receiverSortCode)
+	}
+	return result, err
+}
+
+func (s *LedgerService) settlePaymentOnce(ctx context.Context, msgID string, sender string, receiver string, amount float64, endToEndID string, senderSortCode, receiverSortCode string) (SettlementResult, error) {
 	var result SettlementResult
 
 	if amount > singlePaymentLimit {
@@ -411,11 +436,11 @@ func (s *LedgerService) SettlePayment(ctx context.Context, msgID string, sender 
 		var existingAmount float64
 
 		err := tx.QueryRow(ctx, `
-			INSERT INTO transactions (msg_id, sender_bic, receiver_bic, amount, status, end_to_end_id)
-			VALUES ($1, $2, $3, $4, 'PENDING', $5)
+			INSERT INTO transactions (msg_id, sender_bic, receiver_bic, sender_sort_code, receiver_sort_code, amount, status, end_to_end_id)
+			VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6, 'PENDING', $7)
 			ON CONFLICT (msg_id) DO UPDATE SET msg_id = EXCLUDED.msg_id
 			RETURNING id, status, sender_bic, receiver_bic, amount`,
-			msgID, sender, receiver, amount, endToEndID).Scan(&internalUUID, &currentStatus, &existingSender, &existingReceiver, &existingAmount)
+			msgID, sender, receiver, senderSortCode, receiverSortCode, amount, endToEndID).Scan(&internalUUID, &currentStatus, &existingSender, &existingReceiver, &existingAmount)
 
 		if err != nil {
 			return fmt.Errorf("failed to initialize transaction: %w", err)

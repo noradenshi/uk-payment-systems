@@ -26,9 +26,9 @@ type SettlementResult struct {
 	ReasonCode string
 }
 
-func (s *LedgerService) RegisterParticipant(ctx context.Context, bic, name string, initialBalance float64, pType, sponsorBic string) error {
+func (s *LedgerService) RegisterParticipant(ctx context.Context, bic, name, sortCode string, initialBalance float64, pType, sponsorBic string) error {
 	return pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, "INSERT INTO participant_profiles (bic_code, name, participant_type, sponsor_bic) VALUES ($1, $2, $3, NULLIF($4, ''))", bic, name, pType, sponsorBic); err != nil {
+		if _, err := tx.Exec(ctx, "INSERT INTO participant_profiles (bic_code, name, sort_code, participant_type, sponsor_bic) VALUES ($1, $2, NULLIF($3, ''), $4, NULLIF($5, ''))", bic, name, sortCode, pType, sponsorBic); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, "INSERT INTO participant_statuses (bic_code) VALUES ($1)", bic); err != nil {
@@ -44,7 +44,7 @@ func (s *LedgerService) RegisterParticipant(ctx context.Context, bic, name strin
 func (s *LedgerService) ListParticipants(ctx context.Context) ([]map[string]interface{}, error) {
 	_ = s.EnforceRealtimeLiquidityBlocks(ctx)
 	rows, err := s.Pool.Query(ctx, `
-		SELECT p.bic_code, p.name, COALESCE(st.status::text, 'ACTIVE'), COALESCE(l.balance, 0), p.currency,
+		SELECT p.bic_code, p.name, COALESCE(p.sort_code, ''), COALESCE(st.status::text, 'ACTIVE'), COALESCE(l.balance, 0), p.currency,
 		       p.participant_type, p.sponsor_bic, COALESCE(st.overdraft_limit,0)
 		FROM participant_profiles p LEFT JOIN participant_statuses st ON st.bic_code = p.bic_code LEFT JOIN participant_liquidity l ON l.bic_code = p.bic_code ORDER BY p.bic_code`)
 	if err != nil {
@@ -53,14 +53,14 @@ func (s *LedgerService) ListParticipants(ctx context.Context) ([]map[string]inte
 	defer rows.Close()
 	var result []map[string]interface{}
 	for rows.Next() {
-		var bic, name, status, currency, pType string
+		var bic, name, sortCode, status, currency, pType string
 		var balance float64
 		var overdraftLimit float64
 		var sponsorBic *string
-		if err := rows.Scan(&bic, &name, &status, &balance, &currency, &pType, &sponsorBic, &overdraftLimit); err != nil {
+		if err := rows.Scan(&bic, &name, &sortCode, &status, &balance, &currency, &pType, &sponsorBic, &overdraftLimit); err != nil {
 			return nil, err
 		}
-		entry := map[string]interface{}{"bic": bic, "name": name, "status": status, "balance": balance, "currency": currency, "participant_type": pType, "overdraft_limit": overdraftLimit}
+		entry := map[string]interface{}{"bic": bic, "name": name, "sort_code": sortCode, "status": status, "balance": balance, "currency": currency, "participant_type": pType, "overdraft_limit": overdraftLimit}
 		if sponsorBic != nil {
 			entry["sponsor_bic"] = *sponsorBic
 		}
@@ -103,22 +103,35 @@ func (s *LedgerService) GetPosition(ctx context.Context, bic string) (map[string
 	return map[string]interface{}{"bic": bic, "balance": balance, "available": balance, "earmarked": 0}, nil
 }
 
-func (s *LedgerService) SettleSIP(ctx context.Context, msgID, sender, receiver string, amount float64, endToEndID string) (SettlementResult, error) {
+func (s *LedgerService) SettleSIP(ctx context.Context, msgID, sender, receiver string, amount float64, endToEndID string, senderSortCode, receiverSortCode string) (SettlementResult, error) {
+	result, err := s.settleSIPOnce(ctx, msgID, sender, receiver, amount, endToEndID, senderSortCode, receiverSortCode)
+	if err != nil {
+		return result, err
+	}
+	if result.Status == "PDNG" {
+		s.ResolveGridlock(ctx)
+		result, err = s.settleSIPOnce(ctx, msgID, sender, receiver, amount, endToEndID, senderSortCode, receiverSortCode)
+	}
+	return result, err
+}
+
+func (s *LedgerService) settleSIPOnce(ctx context.Context, msgID, sender, receiver string, amount float64, endToEndID string, senderSortCode, receiverSortCode string) (SettlementResult, error) {
 	var result SettlementResult
 	if amount > fpsSinglePaymentLimit {
 		return SettlementResult{Status: "RJCT", ReasonCode: "AM05"}, nil
 	}
+
 	err := pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
 		var internalUUID pgtype.UUID
 		var currentStatus string
 		var existingSender, existingReceiver string
 		var existingAmount float64
 		err := tx.QueryRow(ctx, `
-			INSERT INTO fps_transactions (msg_id, sender_bic, receiver_bic, amount, status, end_to_end_id, payment_type)
-			VALUES ($1, $2, $3, $4, 'PENDING', $5, 'SIP')
+			INSERT INTO fps_transactions (msg_id, sender_bic, receiver_bic, sender_sort_code, receiver_sort_code, amount, status, end_to_end_id, payment_type)
+			VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6, 'PENDING', $7, 'SIP')
 			ON CONFLICT (msg_id) DO UPDATE SET msg_id = EXCLUDED.msg_id
 			RETURNING id, status, sender_bic, receiver_bic, amount`,
-			msgID, sender, receiver, amount, endToEndID).Scan(&internalUUID, &currentStatus, &existingSender, &existingReceiver, &existingAmount)
+			msgID, sender, receiver, senderSortCode, receiverSortCode, amount, endToEndID).Scan(&internalUUID, &currentStatus, &existingSender, &existingReceiver, &existingAmount)
 		if err != nil {
 			return fmt.Errorf("failed to init: %w", err)
 		}
@@ -487,7 +500,7 @@ func (s *LedgerService) ListPayments(ctx context.Context, statusFilter string, l
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	q := "SELECT msg_id, sender_bic, receiver_bic, amount, status::text, created_at, payment_type FROM fps_transactions"
+	q := "SELECT msg_id, sender_bic, receiver_bic, COALESCE(sender_sort_code, ''), COALESCE(receiver_sort_code, ''), amount, status::text, created_at, payment_type FROM fps_transactions"
 	var args []interface{}
 	if statusFilter != "" {
 		q += " WHERE status = $1"
@@ -502,13 +515,13 @@ func (s *LedgerService) ListPayments(ctx context.Context, statusFilter string, l
 	defer rows.Close()
 	var result []map[string]interface{}
 	for rows.Next() {
-		var msgID, sender, receiver, status, pType string
+		var msgID, sender, receiver, senderSC, receiverSC, status, pType string
 		var amount float64
 		var createdAt time.Time
-		if err := rows.Scan(&msgID, &sender, &receiver, &amount, &status, &createdAt, &pType); err != nil {
+		if err := rows.Scan(&msgID, &sender, &receiver, &senderSC, &receiverSC, &amount, &status, &createdAt, &pType); err != nil {
 			return nil, err
 		}
-		result = append(result, map[string]interface{}{"msg_id": msgID, "sender_bic": sender, "receiver_bic": receiver, "amount": amount, "status": status, "created_at": createdAt, "payment_type": pType})
+		result = append(result, map[string]interface{}{"msg_id": msgID, "sender_bic": sender, "receiver_bic": receiver, "sender_sort_code": senderSC, "receiver_sort_code": receiverSC, "amount": amount, "status": status, "created_at": createdAt, "payment_type": pType})
 	}
 	return result, nil
 }
@@ -517,7 +530,8 @@ func (s *LedgerService) GetPaymentDetails(ctx context.Context, msgID string) (ma
 	var id, sender, receiver, status, endToEndID, pType string
 	var amount float64
 	var createdAt time.Time
-	err := s.Pool.QueryRow(ctx, "SELECT id::text, sender_bic, receiver_bic, amount, status::text, COALESCE(end_to_end_id,''), payment_type, created_at FROM fps_transactions WHERE msg_id=$1", msgID).Scan(&id, &sender, &receiver, &amount, &status, &endToEndID, &pType, &createdAt)
+	var senderSortCode, receiverSortCode *string
+	err := s.Pool.QueryRow(ctx, "SELECT id::text, sender_bic, receiver_bic, sender_sort_code, receiver_sort_code, amount, status::text, COALESCE(end_to_end_id,''), payment_type, created_at FROM fps_transactions WHERE msg_id=$1", msgID).Scan(&id, &sender, &receiver, &senderSortCode, &receiverSortCode, &amount, &status, &endToEndID, &pType, &createdAt)
 	if err != nil {
 		return nil, err
 	}
@@ -531,7 +545,14 @@ func (s *LedgerService) GetPaymentDetails(ctx context.Context, msgID string) (ma
 			journal = append(journal, map[string]interface{}{"bic": bic, "amount": amt})
 		}
 	}
-	return map[string]interface{}{"msg_id": msgID, "sender_bic": sender, "receiver_bic": receiver, "amount": amount, "status": status, "end_to_end_id": endToEndID, "payment_type": pType, "created_at": createdAt, "audit_trail": journal}, nil
+	result := map[string]interface{}{"msg_id": msgID, "sender_bic": sender, "receiver_bic": receiver, "amount": amount, "status": status, "end_to_end_id": endToEndID, "payment_type": pType, "created_at": createdAt, "audit_trail": journal}
+	if senderSortCode != nil {
+		result["sender_sort_code"] = *senderSortCode
+	}
+	if receiverSortCode != nil {
+		result["receiver_sort_code"] = *receiverSortCode
+	}
+	return result, nil
 }
 
 func (s *LedgerService) RecallPayment(ctx context.Context, msgID string) (bool, error) {

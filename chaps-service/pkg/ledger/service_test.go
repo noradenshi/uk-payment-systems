@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"testing"
+	"time"
 )
 
 func TestErrorSentinels(t *testing.T) {
@@ -122,5 +123,58 @@ func TestPosition_Struct(t *testing.T) {
 	}
 	if p.Available != 950000.00 {
 		t.Errorf("Available = %f, want %f", p.Available, 950000.00)
+	}
+}
+
+func TestParticipantSummary_SortCode(t *testing.T) {
+	sortCode := "20-00-00"
+	p := ParticipantSummary{
+		BIC:      "BARCGB2L",
+		Name:     "Barclays Bank",
+		SortCode: sortCode,
+		Status:   "ACTIVE",
+		Balance:  1000000.00,
+	}
+	if p.SortCode != sortCode {
+		t.Errorf("SortCode = %q, want %q", p.SortCode, sortCode)
+	}
+	if p.BIC != "BARCGB2L" {
+		t.Errorf("BIC = %q, want %q", p.BIC, "BARCGB2L")
+	}
+}
+
+func TestPaymentSummary_SortCode(t *testing.T) {
+	now := time.Now()
+	p := PaymentSummary{
+		MsgID:           "CHAPS-SORT-TEST-001",
+		SenderBIC:       "SNDRUK22",
+		ReceiverBIC:     "HSBCGB44",
+		SenderSortCode:   "60-00-00",
+		ReceiverSortCode: "40-00-00",
+		Amount:           1000.00,
+		Status:           "SETTLED",
+		CreatedAt:        now,
+	}
+	if p.SenderSortCode != "60-00-00" {
+		t.Errorf("SenderSortCode = %q, want %q", p.SenderSortCode, "60-00-00")
+	}
+	if p.ReceiverSortCode != "40-00-00" {
+		t.Errorf("ReceiverSortCode = %q, want %q", p.ReceiverSortCode, "40-00-00")
+	}
+}
+
+func TestPaymentSummary_SortCodeEmpty(t *testing.T) {
+	p := PaymentSummary{
+		MsgID:     "CHAPS-NO-SORT-001",
+		SenderBIC: "SNDRUK22",
+		ReceiverBIC: "HSBCGB44",
+		Amount:    100.00,
+		Status:    "PENDING",
+	}
+	if p.SenderSortCode != "" {
+		t.Errorf("expected empty SenderSortCode, got %q", p.SenderSortCode)
+	}
+	if p.ReceiverSortCode != "" {
+		t.Errorf("expected empty ReceiverSortCode, got %q", p.ReceiverSortCode)
 	}
 }

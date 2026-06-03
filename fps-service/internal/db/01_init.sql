@@ -6,6 +6,7 @@ CREATE TYPE payment_status AS ENUM ('PENDING', 'QUEUED', 'SETTLED', 'REJECTED');
 CREATE TABLE participant_profiles (
     bic_code VARCHAR(11) PRIMARY KEY,
     name TEXT NOT NULL,
+    sort_code VARCHAR(9),
     currency VARCHAR(3) DEFAULT 'GBP',
     participant_type VARCHAR(10) NOT NULL DEFAULT 'DIRECT' CHECK (participant_type IN ('DIRECT', 'INDIRECT')),
     sponsor_bic VARCHAR(11),
@@ -35,6 +36,8 @@ CREATE TABLE fps_transactions (
     end_to_end_id VARCHAR(35),
     sender_bic VARCHAR(11) REFERENCES participant_profiles(bic_code) ON DELETE RESTRICT,
     receiver_bic VARCHAR(11) REFERENCES participant_profiles(bic_code) ON DELETE RESTRICT,
+    sender_sort_code VARCHAR(9),
+    receiver_sort_code VARCHAR(9),
     amount DECIMAL(20, 2) NOT NULL,
     status payment_status DEFAULT 'PENDING',
     payment_type VARCHAR(20) DEFAULT 'SIP',

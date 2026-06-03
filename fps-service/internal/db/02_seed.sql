@@ -1,15 +1,15 @@
 TRUNCATE participant_liquidity, participant_statuses, participant_profiles, fps_dns_cycles CASCADE;
 
-WITH seed_data (bic, name, bal) AS (
+WITH seed_data (bic, name, sort_code, bal) AS (
     VALUES
-        ('BARCGB2L', 'Barclays Bank', 500000.00),
-        ('HSBCGB44', 'HSBC UK', 300000.00),
-        ('LLOYGB21', 'Lloyds Bank', 400000.00),
-        ('SNDRUK22', 'Alice Bank', 500000.00)
+        ('BARCGB2L', 'Barclays Bank', '20-00-00', 500000.00),
+        ('HSBCGB44', 'HSBC UK', '40-00-00', 300000.00),
+        ('LLOYGB21', 'Lloyds Bank', '30-00-00', 400000.00),
+        ('SNDRUK22', 'Alice Bank', '60-00-00', 500000.00)
 ),
 ins_profiles AS (
-    INSERT INTO participant_profiles (bic_code, name, participant_type)
-    SELECT bic, name, 'DIRECT' FROM seed_data
+    INSERT INTO participant_profiles (bic_code, name, sort_code, participant_type)
+    SELECT bic, name, sort_code, 'DIRECT' FROM seed_data
     RETURNING bic_code
 ),
 ins_statuses AS (

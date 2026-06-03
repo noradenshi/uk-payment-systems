@@ -201,9 +201,10 @@ func (s *Server) handleGetBlock(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		BIC     string  `json:"bic"`
-		Name    string  `json:"name"`
-		Balance float64 `json:"balance"`
+		BIC      string  `json:"bic"`
+		Name     string  `json:"name"`
+		SortCode string  `json:"sort_code,omitempty"`
+		Balance  float64 `json:"balance"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -224,7 +225,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := s.Ledger.RegisterParticipant(r.Context(), req.BIC, req.Name, req.Balance)
+	err := s.Ledger.RegisterParticipant(r.Context(), req.BIC, req.Name, req.SortCode, req.Balance)
 	if err != nil {
 		log.Printf("Failed to register participant %s: %v", req.BIC, err)
 		http.Error(w, "Failed to create participant", http.StatusInternalServerError)
@@ -374,7 +375,7 @@ func (s *Server) processXMLPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := s.Ledger.SettlePayment(r.Context(), msg.MsgId, msg.Sender, msg.DestBIC, msg.Amount, msg.EndToEndId)
+	res, err := s.Ledger.SettlePayment(r.Context(), msg.MsgId, msg.Sender, msg.DestBIC, msg.Amount, msg.EndToEndId, msg.SenderSortCode, msg.DestSortCode)
 	if err != nil {
 		log.Printf("[CRITICAL] Ledger system failure for MsgId %s: %v", msg.MsgId, err)
 		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
@@ -406,11 +407,13 @@ func (s *Server) processXMLPayment(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		MsgID       string  `json:"msg_id"`
-		EndToEndID  string  `json:"end_to_end_id"`
-		SenderBIC   string  `json:"sender_bic"`
-		ReceiverBIC string  `json:"receiver_bic"`
-		Amount      float64 `json:"amount"`
+		MsgID           string  `json:"msg_id"`
+		EndToEndID      string  `json:"end_to_end_id"`
+		SenderBIC       string  `json:"sender_bic"`
+		ReceiverBIC     string  `json:"receiver_bic"`
+		SenderSortCode  string  `json:"sender_sort_code,omitempty"`
+		ReceiverSortCode string `json:"receiver_sort_code,omitempty"`
+		Amount          float64 `json:"amount"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		badRequest(w, "Invalid request body")
@@ -429,7 +432,7 @@ func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := s.Ledger.SettlePayment(r.Context(), req.MsgID, req.SenderBIC, req.ReceiverBIC, req.Amount, req.EndToEndID)
+	res, err := s.Ledger.SettlePayment(r.Context(), req.MsgID, req.SenderBIC, req.ReceiverBIC, req.Amount, req.EndToEndID, req.SenderSortCode, req.ReceiverSortCode)
 	if err != nil {
 		log.Printf("[CRITICAL] Ledger system failure for MsgId %s: %v", req.MsgID, err)
 		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
