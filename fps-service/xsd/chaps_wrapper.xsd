@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns:h2="urn:iso:std:iso:20022:tech:xsd:head.001.001.02"
+           xmlns:h4="urn:iso:std:iso:20022:tech:xsd:head.001.001.04"
+           elementFormDefault="qualified">
+
+    <xs:import namespace="urn:iso:std:iso:20022:tech:xsd:head.001.001.02" schemaLocation="head.001.001.02.xsd"/>
+    <xs:import namespace="urn:iso:std:iso:20022:tech:xsd:head.001.001.04" schemaLocation="head.001.001.04.xsd"/>
+
+    <xs:import namespace="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.14" schemaLocation="pacs.008.001.14.xsd"/>
+    <xs:import namespace="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.16" schemaLocation="pacs.002.001.16.xsd"/>
+
+    <xs:element name="BizMsg">
+        <xs:complexType>
+            <xs:sequence>
+                <xs:choice>
+                    <xs:element ref="h2:AppHdr"/>
+                    <xs:element ref="h4:AppHdr"/>
+                </xs:choice>
+                
+                <xs:any namespace="##other" processContents="strict"/>
+            </xs:sequence>
+        </xs:complexType>
+    </xs:element>
+</xs:schema>

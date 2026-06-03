@@ -20,11 +20,13 @@ import (
 	"fps-service/pkg/iso20022"
 	"fps-service/pkg/iso8583"
 	"fps-service/pkg/ledger"
+	"fps-service/pkg/validator"
 )
 
 type Server struct {
-	Ledger *ledger.LedgerService
-	Events *events.EventBus
+	Validator *validator.ValidatorRegistry
+	Ledger    *ledger.LedgerService
+	Events    *events.EventBus
 }
 
 var reBIC = regexp.MustCompile(`^[A-Z0-9]{8,11}$`)
@@ -442,8 +444,15 @@ func (s *Server) processXMLPayment(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
+	docBytes, version, err := s.Validator.ValidateWrapped(body)
+	if err != nil {
+		log.Printf("Schema Validation failed [%s]: %v", version, err)
+		s.sendXMLReject(w, "XMLI", "SCHEMA-ERR")
+		return
+	}
+
 	var msg iso20022.Pacs008Message
-	if err := xml.Unmarshal(body, &msg); err != nil {
+	if err := xml.Unmarshal(docBytes, &msg); err != nil {
 		log.Printf("XML Unmarshal Error: %v", err)
 		s.sendXMLReject(w, "XMLI", "PARSE-ERR")
 		return
