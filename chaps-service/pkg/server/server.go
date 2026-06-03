@@ -138,6 +138,44 @@ func loadGlobalSchedule(system string) map[string]interface{} {
 	return map[string]interface{}{}
 }
 
+func parseTimeOfDay(s string) (int, error) {
+	t, err := time.Parse("15:04", s)
+	if err != nil {
+		return 0, err
+	}
+	return t.Hour()*60 + t.Minute(), nil
+}
+
+func checkCHAPSHours(cfg map[string]interface{}, now time.Time) error {
+	openStr, _ := cfg["opening_time"].(string)
+	cutoffStr, _ := cfg["interbank_cutoff"].(string)
+
+	if openStr == "" {
+		openStr = "06:00"
+	}
+	if cutoffStr == "" {
+		cutoffStr = "18:00"
+	}
+
+	nowMin := now.Hour()*60 + now.Minute()
+	openMin, err := parseTimeOfDay(openStr)
+	if err != nil {
+		return nil
+	}
+	cutoffMin, err := parseTimeOfDay(cutoffStr)
+	if err != nil {
+		return nil
+	}
+
+	if nowMin < openMin {
+		return fmt.Errorf("CHAPS opens at %s", openStr)
+	}
+	if nowMin >= cutoffMin {
+		return fmt.Errorf("CHAPS interbank cutoff at %s passed", cutoffStr)
+	}
+	return nil
+}
+
 func (s *Server) GetPayment(w http.ResponseWriter, r *http.Request) {
 	msgID := r.PathValue("id")
 	if msgID == "" {
@@ -366,6 +404,12 @@ func (s *Server) handleUnblockParticipant(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) ProcessPayment(w http.ResponseWriter, r *http.Request) {
+	cfg := loadGlobalSchedule("chaps")
+	if err := checkCHAPSHours(cfg, time.Now()); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusServiceUnavailable)
+		return
+	}
+
 	contentType := r.Header.Get("Content-Type")
 
 	if strings.Contains(contentType, "application/json") {

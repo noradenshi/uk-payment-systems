@@ -239,6 +239,11 @@ config/sessions.json
 
 For BACS specifically: `AdvanceCycles` compares cycle `created_at + duration` against `NOW()`, not static `DATE` columns — so sub-day durations work in demo mode. The new cycle created by `CloseInputDay` sets its dates using config durations.
 
+Operating hours are enforced at the handler level:
+- **FPS**: `ProcessPayment` and `handleISO8583TCP` reject payments outside `opening_time`-`closing_time` with HTTP 503 or ISO 8583 DE39=91
+- **CHAPS**: `ProcessPayment` rejects payments before `opening_time` or after `interbank_cutoff` with HTTP 503
+- **BACS**: `handleSubmit` rejects file submissions after `input_cutoff` with HTTP 503
+
 #### Mode switching
 
 Set `"mode": "demo"` or `"mode": "production"` per service in `sessions.json`:
@@ -264,11 +269,11 @@ Set `"mode": "demo"` or `"mode": "production"` per service in `sessions.json`:
 | `settlement_times` | FPS | ✅ Next-cycle scheduling via `nextSettlementTime()` |
 | `processing_duration_minutes` | BACS | ✅ Drives `AdvanceCycles` + `CloseInputDay` |
 | `settlement_duration_minutes` | BACS | ✅ Drives `AdvanceCycles` + `CloseInputDay` |
-| `opening_time` | FPS, CHAPS | ⚠️ Display only in `/v1/system/schedule` |
-| `closing_time` | FPS | ⚠️ Display only |
-| `customer_cutoff` | CHAPS | ⚠️ Display only |
-| `interbank_cutoff` | CHAPS | ⚠️ Display only |
-| `input_cutoff` | BACS | ⚠️ Display only |
+| `opening_time` | FPS, CHAPS | ✅ Gates payment processing via `checkOperatingHours` / `checkCHAPSHours` |
+| `closing_time` | FPS | ✅ Gates payment processing via `checkOperatingHours` |
+| `customer_cutoff` | CHAPS | Display only in `/v1/system/schedule` |
+| `interbank_cutoff` | CHAPS | ✅ Gates payment processing via `checkCHAPSHours` |
+| `input_cutoff` | BACS | ✅ Gates file submissions via `checkInputCutoff` |
 
 Scheduler starts in `main.go` via `srv.StartScheduler(schedCtx)` and stops cleanly on SIGINT/SIGTERM via context cancellation. All tasks log on failure but never crash the service.
 

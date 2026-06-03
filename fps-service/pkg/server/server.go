@@ -164,6 +164,36 @@ func loadGlobalSchedule(system string) map[string]interface{} {
 	return map[string]interface{}{}
 }
 
+func checkOperatingHours(cfg map[string]interface{}, now time.Time) error {
+	openStr, _ := cfg["opening_time"].(string)
+	closeStr, _ := cfg["closing_time"].(string)
+	if openStr == "" {
+		openStr = "00:00"
+	}
+	if closeStr == "" {
+		closeStr = "23:59"
+	}
+	openTime, err1 := time.Parse("15:04", openStr)
+	closeTime, err2 := time.Parse("15:04", closeStr)
+	if err1 != nil || err2 != nil {
+		return nil
+	}
+	nowMinutes := now.Hour()*60 + now.Minute()
+	openMinutes := openTime.Hour()*60 + openTime.Minute()
+	closeMinutes := closeTime.Hour()*60 + closeTime.Minute()
+
+	if openMinutes <= closeMinutes {
+		if nowMinutes < openMinutes || nowMinutes >= closeMinutes {
+			return fmt.Errorf("service closed: %s-%s", openStr, closeStr)
+		}
+	} else {
+		if nowMinutes >= closeMinutes && nowMinutes < openMinutes {
+			return fmt.Errorf("service closed: %s-%s", openStr, closeStr)
+		}
+	}
+	return nil
+}
+
 func (s *Server) GetPayment(w http.ResponseWriter, r *http.Request) {
 	msgID := r.PathValue("id")
 	if msgID == "" {
@@ -377,6 +407,12 @@ func (s *Server) handleUnblockParticipant(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) ProcessPayment(w http.ResponseWriter, r *http.Request) {
+	cfg := loadGlobalSchedule("fps")
+	if err := checkOperatingHours(cfg, time.Now()); err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusServiceUnavailable)
+		return
+	}
+
 	contentType := r.Header.Get("Content-Type")
 
 	if strings.Contains(contentType, "application/json") {
@@ -1027,6 +1063,22 @@ func (s *Server) handleISO8583TCP(conn net.Conn) {
 
 	if msg.DE32_Acquirer == "" || msg.DE100_Receiver == "" || msg.DE4_Amount <= 0 {
 		log.Printf("ISO8583 TCP: missing required fields")
+		return
+	}
+
+	cfg := loadGlobalSchedule("fps")
+	if err := checkOperatingHours(cfg, time.Now()); err != nil {
+		log.Printf("ISO8583 TCP: %v", err)
+		resp := &iso8583.Message0210{
+			DE39_RespCode: "91",
+			DE4_Amount:    msg.DE4_Amount,
+			DE11_Trace:    msg.DE11_Trace,
+			DE32_Acquirer: msg.DE32_Acquirer,
+			DE100_Receiver: msg.DE100_Receiver,
+		}
+		encoded := resp.Encode()
+		binary.Write(conn, binary.BigEndian, uint16(len(encoded)))
+		conn.Write(encoded)
 		return
 	}
 

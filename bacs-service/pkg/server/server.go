@@ -127,9 +127,32 @@ func loadGlobalSchedule(system string) map[string]interface{} {
 	return map[string]interface{}{}
 }
 
+func checkInputCutoff(cfg map[string]interface{}, now time.Time) error {
+	cutoffStr, _ := cfg["input_cutoff"].(string)
+	if cutoffStr == "" {
+		return nil
+	}
+	cutoff, err := time.Parse("15:04", cutoffStr)
+	if err != nil {
+		return nil
+	}
+	nowMin := now.Hour()*60 + now.Minute()
+	cutoffMin := cutoff.Hour()*60 + cutoff.Minute()
+	if nowMin >= cutoffMin {
+		return fmt.Errorf("input cutoff at %s passed, submissions closed until next cycle", cutoffStr)
+	}
+	return nil
+}
+
 // ── File Submission Handlers ──
 
 func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
+	cfg := loadGlobalSchedule("bacs")
+	if err := checkInputCutoff(cfg, time.Now()); err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
 	contentType := r.Header.Get("Content-Type")
 	var content string
 	var filename string
