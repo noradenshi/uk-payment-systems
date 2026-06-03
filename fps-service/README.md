@@ -237,6 +237,79 @@ Client                            Server (:7421)
 
 Each connection handles one request-response exchange and closes. Goroutine-per-connection with a 10-second ledger timeout.
 
+**Usage example (Go):**
+```go
+conn, _ := net.Dial("tcp", "localhost:7421")
+defer conn.Close()
+
+// Build ISO 8583 0200 binary
+body := encode0200("SNDRUK22", "BARCGB2L", 5000, 123456)
+binary.Write(conn, binary.BigEndian, uint16(len(body)))
+conn.Write(body)
+
+// Read response length-prefixed 0210
+var respLen uint16
+binary.Read(conn, binary.BigEndian, &respLen)
+resp := make([]byte, respLen)
+io.ReadFull(conn, resp)
+fmt.Printf("0210: %x\n", resp)
+
+func encode0200(acq, recv string, amtPence int64, trace int) []byte {
+    var buf []byte
+    buf = append(buf, []byte("0200")...)
+    prim := uint64(1<<(64-4)) | uint64(1<<(64-11)) | uint64(1<<(64-32)) | uint64(1<<63)
+    sec  := uint64(1 << (128 - 100))
+    b := make([]byte, 8)
+    binary.BigEndian.PutUint64(b, prim); buf = append(buf, b...)
+    binary.BigEndian.PutUint64(b, sec);  buf = append(buf, b...)
+    buf = append(buf, fmt.Sprintf("%012d", amtPence)...)
+    buf = append(buf, fmt.Sprintf("%06d", trace)...)
+    buf = append(buf, byte(len(acq))); buf = append(buf, []byte(acq)...)
+    buf = append(buf, byte(len(recv))); buf = append(buf, []byte(recv)...)
+    return buf
+}
+```
+
+**Usage example (bash via `nc`):**
+```bash
+# Use a helper script (e.g. Python or Go tool) to build the binary,
+# or pipe pre-encoded hex:
+echo '023030303030303030303030303030303035303030303132333435363808534e4452554b323208424152434742324c' \
+  | xxd -r -p \
+  | python3 -c "
+import sys, struct
+data = sys.stdin.buffer.read()
+sys.stdout.buffer.write(struct.pack('>H', len(data)) + data)
+" \
+  | nc -q1 localhost 7421 | xxd
+```
+
+**Python test client:**
+```python
+import socket, struct
+
+def build_0200():
+    buf = b'0200'
+    # bitmap: bits 4, 11, 32, 100
+    prim = (1 << (64-4)) | (1 << (64-11)) | (1 << (64-32)) | (1 << 63)
+    sec  = 1 << (128-100)
+    buf += struct.pack('>Q', prim)
+    buf += struct.pack('>Q', sec)
+    buf += b'000000005000'       # DE4: 50.00 GBP (5000 pence)
+    buf += b'123456'             # DE11: trace
+    buf += struct.pack('B', 8) + b'SNDRUK22'   # DE32: acquirer (LLVAR)
+    buf += struct.pack('B', 8) + b'BARCGB2L'   # DE100: receiver (LLVAR)
+    return buf
+
+s = socket.socket()
+s.connect(('localhost', 7421))
+msg = build_0200()
+s.send(struct.pack('>H', len(msg)) + msg)
+resp_len = struct.unpack('>H', s.recv(2))[0]
+resp = s.recv(resp_len)
+print('0210 response:', resp.hex())
+```
+
 ---
 
 ## Settlement: DNS (Deferred Net Settlement)
