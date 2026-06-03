@@ -162,7 +162,7 @@ func (s *LedgerService) GetCurrentCycle(ctx context.Context) (map[string]interfa
 	}, nil
 }
 
-func (s *LedgerService) CloseInputDay(ctx context.Context) error {
+func (s *LedgerService) CloseInputDay(ctx context.Context, processingInterval, settlementInterval time.Duration) error {
 	return pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
 		var cycleID int
 		err := tx.QueryRow(ctx, `SELECT id FROM bacs_cycles WHERE status = 'OPEN' ORDER BY created_at DESC LIMIT 1 FOR UPDATE`).Scan(&cycleID)
@@ -175,7 +175,9 @@ func (s *LedgerService) CloseInputDay(ctx context.Context) error {
 		}
 		_, err = tx.Exec(ctx, `
 			INSERT INTO bacs_cycles (input_date, processing_date, settlement_date, status)
-			VALUES (CURRENT_DATE, CURRENT_DATE+1, CURRENT_DATE+2, 'OPEN')`)
+			VALUES (CURRENT_DATE, CURRENT_DATE + $1::interval, CURRENT_DATE + $2::interval, 'OPEN')`,
+			fmt.Sprintf("%d microseconds", processingInterval.Microseconds()),
+			fmt.Sprintf("%d microseconds", settlementInterval.Microseconds()))
 		return err
 	})
 }
@@ -868,19 +870,21 @@ func (s *LedgerService) UpdateOverdraftLimit(ctx context.Context, bic string, li
 
 // ── Scheduler ──
 
-func (s *LedgerService) AdvanceCycles(ctx context.Context) error {
+func (s *LedgerService) AdvanceCycles(ctx context.Context, processingDuration, settlementDuration time.Duration) error {
 	var hasWork bool
-	if err := s.Pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM bacs_cycles WHERE status='OPEN' AND processing_date <= CURRENT_DATE)").Scan(&hasWork); err == nil && hasWork {
-		if err := s.CloseInputDay(ctx); err != nil {
+	pgInterval := fmt.Sprintf("%d microseconds", processingDuration.Microseconds())
+	if err := s.Pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM bacs_cycles WHERE status='OPEN' AND created_at + $1::interval <= NOW())", pgInterval).Scan(&hasWork); err == nil && hasWork {
+		if err := s.CloseInputDay(ctx, processingDuration, settlementDuration); err != nil {
 			log.Printf("AdvanceCycles CloseInputDay: %v", err)
 		}
 	}
-	if err := s.Pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM bacs_cycles WHERE status='PROCESSING' AND settlement_date <= CURRENT_DATE)").Scan(&hasWork); err == nil && hasWork {
+	totalInterval := fmt.Sprintf("%d microseconds", (processingDuration + settlementDuration).Microseconds())
+	if err := s.Pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM bacs_cycles WHERE status='PROCESSING' AND created_at + $1::interval <= NOW())", totalInterval).Scan(&hasWork); err == nil && hasWork {
 		if err := s.ProcessCycle(ctx); err != nil {
 			log.Printf("AdvanceCycles ProcessCycle: %v", err)
 		}
 	}
-	if err := s.Pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM bacs_cycles WHERE status='AWAITING_SETTLEMENT' AND settlement_date <= CURRENT_DATE)").Scan(&hasWork); err == nil && hasWork {
+	if err := s.Pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM bacs_cycles WHERE status='AWAITING_SETTLEMENT' AND created_at + $1::interval <= NOW())", totalInterval).Scan(&hasWork); err == nil && hasWork {
 		if _, err := s.SettleCycle(ctx); err != nil {
 			log.Printf("AdvanceCycles SettleCycle: %v", err)
 		}

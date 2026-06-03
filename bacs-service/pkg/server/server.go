@@ -345,7 +345,10 @@ func (s *Server) handleListCycles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCloseInputDay(w http.ResponseWriter, r *http.Request) {
-	if err := s.Ledger.CloseInputDay(r.Context()); err != nil {
+	cfg := loadGlobalSchedule("bacs")
+	processingMin := getDuration(cfg, "processing_duration_minutes", 1440)
+	settlementMin := getDuration(cfg, "settlement_duration_minutes", 1440)
+	if err := s.Ledger.CloseInputDay(r.Context(), processingMin, settlementMin); err != nil {
 		log.Printf("CloseInputDay error: %v", err)
 		http.Error(w, "Failed to close input day", http.StatusInternalServerError)
 		return
