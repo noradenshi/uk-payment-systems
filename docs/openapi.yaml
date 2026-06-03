@@ -1,0 +1,2924 @@
+openapi: "3.0.3"
+info:
+  title: UK Payment Systems (UKPS) — API Specification
+  version: 1.0.0
+  description: |
+    Three-service API simulating the UK interbank payment network:
+
+    | Service | Scheme | Settlement Model | Port | DB Port |
+    |---|---|---|---|---|
+    | CHAPS | ISO 20022 | RTGS (Real-Time Gross Settlement) | 8080 | 5432 |
+    | FPS | ISO 20022 + ISO 8583 | Near-real-time with DNS | 8081 | 5433 |
+    | BACS | Standard 18 | Batch (T+2) Multilateral Netting | 8082 | 5434 |
+
+    **Common patterns:**
+    - All services share the same participant management API under `/v1/participants/`
+    - Payment endpoints under `/v1/payments/{scheme}/`
+    - JSON for GUI/admin, XML (ISO 20022) for external messages, `application/octet-stream` for ISO 8583 (FPS only)
+    - Error body: `{"error": "message"}`
+    - SSE endpoints: `GET /v1/payments/{scheme}/incoming/{bic}`
+    - System schedule: `GET /v1/system/schedule`
+  contact:
+    name: UKPS Project
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8080
+    description: CHAPS service — RTGS
+  - url: http://localhost:8081
+    description: FPS service — Near-real-time
+  - url: http://localhost:8082
+    description: BACS service — Batch
+
+paths:
+  # =========================================================================
+  # CORS
+  # =========================================================================
+  /:
+    options:
+      summary: CORS preflight
+      operationId: optionsRoot
+      parameters:
+        - $ref: '#/components/parameters/Origin'
+      responses:
+        "204":
+          description: No Content — CORS headers set
+
+  # =========================================================================
+  # PARTICIPANT MANAGEMENT (shared across all three services)
+  # =========================================================================
+  /v1/participants/register:
+    post:
+      summary: Register a new participant
+      operationId: registerParticipant
+      tags: [Participants]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [bic, name, balance]
+              properties:
+                bic:
+                  type: string
+                  pattern: "^[A-Z0-9]{8,11}$"
+                  description: Business Identifier Code (8-11 alphanumeric)
+                  example: BARCGB2L
+                name:
+                  type: string
+                  description: Participant (bank) name
+                  example: Barclays Bank
+                sort_code:
+                  type: string
+                  description: UK sort code (optional)
+                  example: "20-00-00"
+                balance:
+                  type: number
+                  format: float
+                  minimum: 0
+                  description: Initial balance in GBP
+                  example: 1000000.00
+                participant_type:
+                  type: string
+                  description: FPS-only — participant type
+                  enum: [DIRECT, INDIRECT]
+                  default: DIRECT
+                sponsor_bic:
+                  type: string
+                  description: FPS-only — sponsor BIC for INDIRECT participants
+                  example: SPONSORBIC
+                su_code:
+                  type: string
+                  description: BACS-only — Service User code
+                  example: SU-BARC
+                is_service_user:
+                  type: boolean
+                  description: BACS-only
+                  default: false
+                is_destination_user:
+                  type: boolean
+                  description: BACS-only
+                  default: false
+      responses:
+        "201":
+          description: Participant created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bic:
+                    type: string
+                    example: BARCGB2L
+                  status:
+                    type: string
+                    example: ACTIVE
+        "400":
+          $ref: '#/components/responses/BadRequest'
+
+  /v1/participants:
+    get:
+      summary: List all participants
+      operationId: listParticipants
+      tags: [Participants]
+      responses:
+        "200":
+          description: List of participants
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ParticipantSummary'
+        "500":
+          $ref: '#/components/responses/InternalError'
+
+  /v1/participants/{bic}/status:
+    patch:
+      summary: Update participant status
+      operationId: updateParticipantStatus
+      tags: [Participants]
+      parameters:
+        - $ref: '#/components/parameters/BicPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  description: New status
+                  enum: [ACTIVE, SUSPENDED, DISABLED]
+                  example: SUSPENDED
+                reason:
+                  type: string
+                  description: Reason for status change
+                  example: Compliance review
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bic:
+                    type: string
+                  status:
+                    type: string
+        "400":
+          $ref: '#/components/responses/BadRequest'
+
+  /v1/participants/{bic}/block:
+    post:
+      summary: Block a participant
+      operationId: blockParticipant
+      tags: [Participants]
+      parameters:
+        - $ref: '#/components/parameters/BicPath'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  default: FRAUD_SUSPECTED
+      responses:
+        "200":
+          description: Blocked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bic:
+                    type: string
+                  status:
+                    type: string
+                    example: SUSPENDED
+                  reason:
+                    type: string
+    get:
+      summary: Get block details
+      operationId: getBlockDetails
+      tags: [Participants]
+      parameters:
+        - $ref: '#/components/parameters/BicPath'
+      responses:
+        "200":
+          description: Block details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bic:
+                    type: string
+                  status:
+                    type: string
+                  blocked_at:
+                    type: string
+                    format: date-time
+                  reason:
+                    type: string
+        "404":
+          $ref: '#/components/responses/NotFound'
+    delete:
+      summary: Unblock a participant
+      operationId: unblockParticipant
+      tags: [Participants]
+      parameters:
+        - $ref: '#/components/parameters/BicPath'
+      responses:
+        "200":
+          description: Unblocked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bic:
+                    type: string
+                  status:
+                    type: string
+                    example: ACTIVE
+
+  /v1/participants/{bic}/positions:
+    get:
+      summary: Get participant liquidity position
+      operationId: getPosition
+      tags: [Participants]
+      parameters:
+        - $ref: '#/components/parameters/BicPath'
+      responses:
+        "200":
+          description: Position
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Position'
+        "404":
+          $ref: '#/components/responses/NotFound'
+
+  # =========================================================================
+  # LIQUIDITY
+  # =========================================================================
+  /v1/liquidity/top-up:
+    post:
+      summary: Top up participant liquidity
+      operationId: topUpLiquidity
+      tags: [Liquidity]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [bic, amount]
+              properties:
+                bic:
+                  type: string
+                  example: BARCGB2L
+                amount:
+                  type: number
+                  format: float
+                  minimum: 0
+                  example: 500000.00
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bic:
+                    type: string
+                  status:
+                    type: string
+                    example: UPDATED
+        "400":
+          $ref: '#/components/responses/BadRequest'
+
+  # =========================================================================
+  # SYSTEM SCHEDULE
+  # =========================================================================
+  /v1/system/schedule:
+    get:
+      summary: Get system schedule configuration
+      operationId: getSystemSchedule
+      tags: [System]
+      responses:
+        "200":
+          description: Schedule
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ChapsSchedule'
+                  - $ref: '#/components/schemas/FpsSchedule'
+                  - $ref: '#/components/schemas/BacsSchedule'
+
+  # =========================================================================
+  # CHAPS-SPECIFIC ENDPOINTS
+  # =========================================================================
+  /v1/payments/chaps:
+    post:
+      summary: Submit a CHAPS payment
+      operationId: processChapsPayment
+      tags: [CHAPS Payments]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/DigitalSignature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChapsPaymentRequest'
+          application/xml:
+            schema:
+              $ref: '#/components/schemas/ChapsXmlRequest'
+      responses:
+        "200":
+          description: Payment settled (ACTC)
+          headers:
+            X-Transaction-Status:
+              schema:
+                type: string
+                example: ACTC
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResult'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/Pacs002XmlResponse'
+        "202":
+          description: Payment queued (PDNG) or rejected (RJCT)
+          headers:
+            X-Transaction-Status:
+              schema:
+                type: string
+                enum: [PDNG, RJCT]
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResult'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/Pacs002XmlResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "415":
+          $ref: '#/components/responses/UnsupportedMediaType'
+        "503":
+          $ref: '#/components/responses/ServiceUnavailable'
+    get:
+      summary: List CHAPS payments
+      operationId: listChapsPayments
+      tags: [CHAPS Payments]
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/StatusFilter'
+      responses:
+        "200":
+          description: List of payments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PaymentSummary'
+
+  /v1/payments/chaps/validate:
+    post:
+      summary: Validate a CHAPS payment
+      operationId: validateChapsPayment
+      tags: [CHAPS Payments]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidationRequest'
+      responses:
+        "200":
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentValidation'
+
+  /v1/payments/chaps/limits:
+    get:
+      summary: Get CHAPS clearing limits
+      operationId: getChapsLimits
+      tags: [CHAPS Payments]
+      parameters:
+        - $ref: '#/components/parameters/BicQuery'
+      responses:
+        "200":
+          description: Clearing limits
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClearingLimits'
+
+  /v1/payments/chaps/limits/{bic}:
+    patch:
+      summary: Update CHAPS participant limit
+      operationId: updateChapsLimit
+      tags: [CHAPS Payments]
+      parameters:
+        - $ref: '#/components/parameters/BicPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                overdraft_limit:
+                  type: number
+                  format: float
+                  example: 50000000.00
+      responses:
+        "200":
+          description: Limit updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bic:
+                    type: string
+                  overdraft_limit:
+                    type: number
+
+  /v1/payments/chaps/gridlock/resolve:
+    post:
+      summary: Resolve gridlock — settle queued payments
+      operationId: resolveChapsGridlock
+      tags: [CHAPS Payments]
+      responses:
+        "200":
+          description: Gridlock resolution complete
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: COMPLETED
+                  settled:
+                    type: integer
+                    example: 3
+
+  /v1/payments/chaps/{id}:
+    get:
+      summary: Get CHAPS payment details
+      operationId: getChapsPayment
+      tags: [CHAPS Payments]
+      parameters:
+        - $ref: '#/components/parameters/PaymentId'
+      responses:
+        "200":
+          description: Payment details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  msg_id:
+                    type: string
+                  status:
+                    type: string
+                    enum: [PENDING, QUEUED, SETTLED, REJECTED]
+                  amount:
+                    type: number
+                  sender_bic:
+                    type: string
+                  receiver_bic:
+                    type: string
+                  sender_sort_code:
+                    type: string
+                  receiver_sort_code:
+                    type: string
+                  end_to_end_id:
+                    type: string
+                  created_at:
+                    type: string
+                    format: date-time
+                  audit_trail:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        bic:
+                          type: string
+                        amount:
+                          type: number
+        "404":
+          $ref: '#/components/responses/NotFound'
+    delete:
+      summary: Cancel a CHAPS payment
+      operationId: cancelChapsPayment
+      tags: [CHAPS Payments]
+      parameters:
+        - $ref: '#/components/parameters/PaymentId'
+      responses:
+        "200":
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  msg_id:
+                    type: string
+                  status:
+                    type: string
+                    example: CANCELLED
+        "409":
+          $ref: '#/components/responses/Conflict'
+    post:
+      summary: Authorize a CHAPS payment (stub)
+      operationId: authorizeChapsPayment
+      tags: [CHAPS Payments]
+      parameters:
+        - $ref: '#/components/parameters/PaymentId'
+      responses:
+        "200":
+          description: Authorized
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  msg_id:
+                    type: string
+                  status:
+                    type: string
+                    example: AUTHORIZED
+                  authorized_at:
+                    type: string
+                    format: date-time
+        "409":
+          $ref: '#/components/responses/Conflict'
+
+  /v1/payments/chaps/{id}/amend:
+    post:
+      summary: Amend a CHAPS payment
+      operationId: amendChapsPayment
+      tags: [CHAPS Payments]
+      parameters:
+        - $ref: '#/components/parameters/PaymentId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                end_to_end_id:
+                  type: string
+      responses:
+        "200":
+          description: Amended
+        "409":
+          $ref: '#/components/responses/Conflict'
+
+  /v1/payments/chaps/incoming/{bic}:
+    get:
+      summary: SSE stream for real-time CHAPS payment events
+      operationId: chapsEvents
+      tags: [CHAPS Events]
+      parameters:
+        - $ref: '#/components/parameters/BicPath'
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                example: "data: {\"type\":\"payment.received\",\"data\":{\"msg_id\":\"PAY-001\",\"sender\":\"SNDRUK22\",\"receiver\":\"HSBCGB44\",\"amount\":250.50,\"status\":\"SETTLED\",\"scheme\":\"CHAPS\"}}\n\n"
+        "400":
+          $ref: '#/components/responses/BadRequest'
+
+  # =========================================================================
+  # FPS-SPECIFIC ENDPOINTS
+  # =========================================================================
+  /v1/payments/fps:
+    post:
+      summary: Submit an FPS payment
+      operationId: processFpsPayment
+      tags: [FPS Payments]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/DigitalSignature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FpsPaymentRequest'
+          application/xml:
+            schema:
+              $ref: '#/components/schemas/ChapsXmlRequest'
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+              description: ISO 8583 binary 0200 message
+      responses:
+        "200":
+          description: Payment settled (ACTC)
+          headers:
+            X-Transaction-Status:
+              schema:
+                type: string
+                example: ACTC
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResult'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/Pacs002XmlResponse'
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+                description: ISO 8583 binary 0210 response
+        "202":
+          description: Payment queued (PDNG) or rejected (RJCT)
+          headers:
+            X-Transaction-Status:
+              schema:
+                type: string
+                enum: [PDNG, RJCT]
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResult'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/Pacs002XmlResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "415":
+          $ref: '#/components/responses/UnsupportedMediaType'
+        "503":
+          $ref: '#/components/responses/ServiceUnavailable'
+    get:
+      summary: List FPS payments
+      operationId: listFpsPayments
+      tags: [FPS Payments]
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/StatusFilter'
+      responses:
+        "200":
+          description: List of payments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PaymentSummary'
+
+  /v1/payments/fps/validate:
+    post:
+      summary: Validate an FPS payment
+      operationId: validateFpsPayment
+      tags: [FPS Payments]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidationRequest'
+      responses:
+        "200":
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentValidation'
+
+  /v1/payments/fps/limits:
+    get:
+      summary: Get FPS clearing limits
+      operationId: getFpsLimits
+      tags: [FPS Payments]
+      parameters:
+        - $ref: '#/components/parameters/BicQuery'
+      responses:
+        "200":
+          description: Clearing limits
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClearingLimits'
+
+  /v1/payments/fps/limits/{bic}:
+    patch:
+      summary: Update FPS participant limit
+      operationId: updateFpsLimit
+      tags: [FPS Payments]
+      parameters:
+        - $ref: '#/components/parameters/BicPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                overdraft_limit:
+                  type: number
+                  format: float
+                  example: 50000000.00
+                single_payment_limit:
+                  type: number
+                  format: float
+                daily_participant_limit:
+                  type: number
+                  format: float
+      responses:
+        "200":
+          description: Limit updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bic:
+                    type: string
+                  status:
+                    type: string
+                    example: LIMITS_UPDATED
+                  overdraft_limit:
+                    type: number
+
+  /v1/payments/fps/gridlock/resolve:
+    post:
+      summary: Resolve gridlock
+      operationId: resolveFpsGridlock
+      tags: [FPS Payments]
+      responses:
+        "200":
+          description: Gridlock resolved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: COMPLETED
+                  settled:
+                    type: integer
+
+  /v1/payments/fps/{id}:
+    get:
+      summary: Get FPS payment details
+      operationId: getFpsPayment
+      tags: [FPS Payments]
+      parameters:
+        - $ref: '#/components/parameters/PaymentId'
+      responses:
+        "200":
+          description: Payment details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  msg_id:
+                    type: string
+                  status:
+                    type: string
+                    enum: [PENDING, QUEUED, SETTLED, REJECTED]
+                  amount:
+                    type: number
+                  sender_bic:
+                    type: string
+                  receiver_bic:
+                    type: string
+                  sender_sort_code:
+                    type: string
+                  receiver_sort_code:
+                    type: string
+                  end_to_end_id:
+                    type: string
+                  payment_type:
+                    type: string
+                    example: SIP
+                  created_at:
+                    type: string
+                    format: date-time
+                  audit_trail:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        bic:
+                          type: string
+                        amount:
+                          type: number
+        "404":
+          $ref: '#/components/responses/NotFound'
+    delete:
+      summary: Cancel an FPS payment
+      operationId: cancelFpsPayment
+      tags: [FPS Payments]
+      parameters:
+        - $ref: '#/components/parameters/PaymentId'
+      responses:
+        "200":
+          description: Recalled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  msg_id:
+                    type: string
+                  status:
+                    type: string
+                    example: RECALLED
+        "409":
+          $ref: '#/components/responses/Conflict'
+
+  # FPS — Standing Orders
+  /v1/payments/fps/standing-orders:
+    post:
+      summary: Create a standing order
+      operationId: createStandingOrder
+      tags: [FPS Standing Orders]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StandingOrderRequest'
+      responses:
+        "201":
+          description: Standing order created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reference:
+                    type: string
+                  status:
+                    type: string
+                    example: ACTIVE
+    get:
+      summary: List standing orders
+      operationId: listStandingOrders
+      tags: [FPS Standing Orders]
+      responses:
+        "200":
+          description: List of standing orders
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StandingOrder'
+
+  /v1/payments/fps/standing-orders/{id}:
+    get:
+      summary: Get a standing order
+      operationId: getStandingOrder
+      tags: [FPS Standing Orders]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Standing order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StandingOrder'
+    patch:
+      summary: Update a standing order
+      operationId: updateStandingOrder
+      tags: [FPS Standing Orders]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                frequency:
+                  type: string
+                  enum: [DAILY, WEEKLY, MONTHLY, YEARLY]
+                amount:
+                  type: number
+                next_date:
+                  type: string
+                  format: date
+                end_date:
+                  type: string
+                  format: date
+      responses:
+        "200":
+          description: Updated
+    delete:
+      summary: Cancel a standing order
+      operationId: cancelStandingOrder
+      tags: [FPS Standing Orders]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  status:
+                    type: string
+                    example: CANCELLED
+
+  # FPS — Forward-Dated Payments
+  /v1/payments/fps/forward-dated:
+    post:
+      summary: Create a forward-dated payment
+      operationId: createForwardDated
+      tags: [FPS Forward-Dated]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [msg_id, sender_bic, receiver_bic, amount, execution_date]
+              properties:
+                msg_id:
+                  type: string
+                  maxLength: 35
+                sender_bic:
+                  type: string
+                receiver_bic:
+                  type: string
+                amount:
+                  type: number
+                  format: float
+                execution_date:
+                  type: string
+                  format: date
+      responses:
+        "201":
+          description: Scheduled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  msg_id:
+                    type: string
+                  status:
+                    type: string
+                    example: SCHEDULED
+    get:
+      summary: List forward-dated payments
+      operationId: listForwardDated
+      tags: [FPS Forward-Dated]
+      responses:
+        "200":
+          description: List
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    msg_id:
+                      type: string
+                    sender_bic:
+                      type: string
+                    receiver_bic:
+                      type: string
+                    amount:
+                      type: number
+                    execution_date:
+                      type: string
+                      format: date-time
+                    status:
+                      type: string
+
+  /v1/payments/fps/forward-dated/{id}:
+    delete:
+      summary: Cancel a forward-dated payment
+      operationId: cancelForwardDated
+      tags: [FPS Forward-Dated]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Cancelled
+
+  # FPS — Bulk Submissions
+  /v1/payments/fps/bulk:
+    post:
+      summary: Create a bulk submission
+      operationId: createBulkSubmission
+      tags: [FPS Bulk]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filename, sender_bic, total_items, total_value]
+              properties:
+                filename:
+                  type: string
+                sender_bic:
+                  type: string
+                total_items:
+                  type: integer
+                total_value:
+                  type: number
+      responses:
+        "201":
+          description: Received
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    example: RECEIVED
+    get:
+      summary: List bulk submissions
+      operationId: listBulkSubmissions
+      tags: [FPS Bulk]
+      responses:
+        "200":
+          description: List
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BulkSubmission'
+
+  /v1/payments/fps/bulk/{id}:
+    get:
+      summary: Get a bulk submission
+      operationId: getBulkSubmission
+      tags: [FPS Bulk]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Bulk submission
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkSubmission'
+
+  # FPS — ISO 8583
+  /v1/payments/fps/iso8583:
+    post:
+      summary: Submit an ISO 8583 binary payment
+      operationId: processIso8583Payment
+      tags: [FPS ISO 8583]
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: ISO 8583 0210 response
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "503":
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /v1/payments/fps/iso8583/decode:
+    get:
+      summary: Decode and display an ISO 8583 message
+      operationId: decodeIso8583
+      tags: [FPS ISO 8583]
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: Decoded fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Iso8583Decoded'
+
+  # FPS — DNS Settlement
+  /v1/settlement/dns/cycle:
+    get:
+      summary: Get current DNS cycle
+      operationId: getCurrentDNS
+      tags: [FPS DNS]
+      responses:
+        "200":
+          description: Current DNS cycle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DnsCycle'
+
+  /v1/settlement/dns/close:
+    post:
+      summary: Close DNS cycle and settle net positions
+      operationId: closeDNS
+      tags: [FPS DNS]
+      responses:
+        "200":
+          description: Cycle closed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: CLOSED
+                  net_positions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        bic:
+                          type: string
+                        net_position:
+                          type: number
+
+  /v1/settlement/dns/history:
+    get:
+      summary: Get DNS cycle history
+      operationId: getDNSHistory
+      tags: [FPS DNS]
+      responses:
+        "200":
+          description: History
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DnsCycle'
+
+  # FPS — Liquidity
+  /v1/liquidity/prefunded/{bic}:
+    get:
+      summary: Get prefunded balance
+      operationId: getPrefunded
+      tags: [FPS Liquidity]
+      parameters:
+        - $ref: '#/components/parameters/BicPath'
+      responses:
+        "200":
+          description: Prefunded balance
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bic:
+                    type: string
+                  prefunded_balance:
+                    type: number
+
+  # FPS — Events
+  /v1/payments/fps/incoming/{bic}:
+    get:
+      summary: SSE stream for real-time FPS payment events
+      operationId: fpsEvents
+      tags: [FPS Events]
+      parameters:
+        - $ref: '#/components/parameters/BicPath'
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                example: "data: {\"type\":\"payment.received\",\"data\":{\"msg_id\":\"FPS-001\",\"sender\":\"BARCGB2L\",\"receiver\":\"HSBCGB44\",\"amount\":250,\"status\":\"SETTLED\",\"scheme\":\"FPS\"}}\n\n"
+
+  # =========================================================================
+  # BACS-SPECIFIC ENDPOINTS
+  # =========================================================================
+  /v1/payments/bacs/submit:
+    post:
+      summary: Submit a Standard 18 file for BACS processing
+      operationId: submitBacsFile
+      tags: [BACS Submissions]
+      parameters:
+        - name: filename
+          in: query
+          schema:
+            type: string
+            default: submission_standard18.txt
+        - name: su_bic
+          in: query
+          schema:
+            type: string
+            description: Service User BIC
+            example: BARCGB2L
+      requestBody:
+        required: true
+        content:
+          text/plain:
+            schema:
+              type: string
+              description: Raw Standard 18 fixed-width file content
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Standard 18 file upload
+      responses:
+        "201":
+          description: Submission received
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BacsSubmission'
+        "202":
+          description: Partially stored
+        "400":
+          description: Parse or validation error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  errors:
+                    type: array
+                    items:
+                      type: string
+        "503":
+          $ref: '#/components/responses/ServiceUnavailable'
+    get:
+      summary: List BACS submissions
+      operationId: listBacsSubmissions
+      tags: [BACS Submissions]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            example: RECEIVED
+        - name: su_bic
+          in: query
+          schema:
+            type: string
+            example: BARCGB2L
+      responses:
+        "200":
+          description: List of submissions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BacsSubmission'
+
+  /v1/payments/bacs/submit/{id}:
+    get:
+      summary: Get a BACS submission
+      operationId: getBacsSubmission
+      tags: [BACS Submissions]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Submission
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BacsSubmission'
+    delete:
+      summary: Recall a BACS submission
+      operationId: recallBacsSubmission
+      tags: [BACS Submissions]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Recalled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  status:
+                    type: string
+                    example: RECALLED
+        "409":
+          $ref: '#/components/responses/Conflict'
+
+  # BACS — Cycles
+  /v1/payments/bacs/cycle/current:
+    get:
+      summary: Get current BACS cycle
+      operationId: getCurrentBacsCycle
+      tags: [BACS Cycles]
+      responses:
+        "200":
+          description: Current cycle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BacsCycle'
+        "404":
+          $ref: '#/components/responses/NotFound'
+
+  /v1/payments/bacs/cycle:
+    get:
+      summary: List BACS cycles
+      operationId: listBacsCycles
+      tags: [BACS Cycles]
+      responses:
+        "200":
+          description: List of cycles
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BacsCycle'
+
+  /v1/payments/bacs/cycle/close:
+    post:
+      summary: Close input day (OPEN → PROCESSING)
+      operationId: closeBacsInputDay
+      tags: [BACS Cycles]
+      responses:
+        "200":
+          description: Cycle advanced
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: PROCESSING
+
+  /v1/payments/bacs/cycle/process:
+    post:
+      summary: Advance cycle (PROCESSING → AWAITING_SETTLEMENT)
+      operationId: processBacsCycle
+      tags: [BACS Cycles]
+      responses:
+        "200":
+          description: Cycle advanced
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: AWAITING_SETTLEMENT
+
+  /v1/payments/bacs/cycle/settle:
+    post:
+      summary: Execute multilateral net settlement
+      operationId: settleBacsCycle
+      tags: [BACS Cycles]
+      responses:
+        "200":
+          description: Settlement complete
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: SETTLED
+        "500":
+          $ref: '#/components/responses/InternalError'
+
+  /v1/payments/bacs/cycle/{cycleDate}:
+    get:
+      summary: Get cycle by input date
+      operationId: getBacsCycleByDate
+      tags: [BACS Cycles]
+      parameters:
+        - name: cycleDate
+          in: path
+          required: true
+          schema:
+            type: string
+            format: date
+            example: "2026-06-03"
+      responses:
+        "200":
+          description: Submissions for cycle
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BacsSubmission'
+
+  # BACS — Mandates
+  /v1/payments/bacs/mandates:
+    post:
+      summary: Create a Direct Debit mandate
+      operationId: createMandate
+      tags: [BACS Mandates]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reference, su_bic]
+              properties:
+                reference:
+                  type: string
+                  example: MAND-001
+                su_bic:
+                  type: string
+                payer_name:
+                  type: string
+                payer_sort_code:
+                  type: string
+                payer_account:
+                  type: string
+                amount:
+                  type: number
+                  format: float
+                frequency:
+                  type: string
+                  enum: [DAILY, WEEKLY, MONTHLY, YEARLY, QUARTERLY]
+                  default: MONTHLY
+      responses:
+        "201":
+          description: Mandate created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  reference:
+                    type: string
+                  status:
+                    type: string
+                    example: ACTIVE
+    get:
+      summary: List mandates
+      operationId: listMandates
+      tags: [BACS Mandates]
+      parameters:
+        - name: su_bic
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of mandates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BacsMandate'
+
+  /v1/payments/bacs/mandates/{ref}:
+    get:
+      summary: Get a mandate
+      operationId: getMandate
+      tags: [BACS Mandates]
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Mandate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BacsMandate'
+    patch:
+      summary: Amend a mandate
+      operationId: amendMandate
+      tags: [BACS Mandates]
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount:
+                  type: number
+                frequency:
+                  type: string
+      responses:
+        "200":
+          description: Amended
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reference:
+                    type: string
+                  status:
+                    type: string
+                    example: AMENDED
+        "409":
+          $ref: '#/components/responses/Conflict'
+    delete:
+      summary: Cancel a mandate
+      operationId: cancelMandate
+      tags: [BACS Mandates]
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reference:
+                    type: string
+                  status:
+                    type: string
+                    example: CANCELLED
+        "409":
+          $ref: '#/components/responses/Conflict'
+
+  /v1/payments/bacs/mandates/{ref}/claim:
+    post:
+      summary: Claim a mandate with payer details
+      operationId: claimMandate
+      tags: [BACS Mandates]
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                payer_sort_code:
+                  type: string
+                payer_account:
+                  type: string
+      responses:
+        "200":
+          description: Claimed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reference:
+                    type: string
+                  status:
+                    type: string
+                    example: CLAIMED
+
+  # BACS — Returns & Rejects
+  /v1/payments/bacs/returns:
+    get:
+      summary: List ARUDD returns
+      operationId: listReturns
+      tags: [BACS Returns]
+      responses:
+        "200":
+          description: List of returns
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: integer
+                    original_transaction_id:
+                      type: integer
+                    reason_code:
+                      type: string
+                    amount:
+                      type: number
+                    return_date:
+                      type: string
+                      format: date-time
+                    dest_sort_code:
+                      type: string
+                    dest_account:
+                      type: string
+                    su_code:
+                      type: string
+    post:
+      summary: Create a return (ARUDD)
+      operationId: createReturn
+      tags: [BACS Returns]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [original_transaction_id, reason_code, amount]
+              properties:
+                original_transaction_id:
+                  type: integer
+                reason_code:
+                  type: string
+                  example: AC-01
+                amount:
+                  type: number
+                  format: float
+                  minimum: 0
+      responses:
+        "201":
+          description: Return created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  status:
+                    type: string
+                    example: RETURNED
+
+  /v1/payments/bacs/rejects:
+    get:
+      summary: List rejected submissions
+      operationId: listRejects
+      tags: [BACS Reports]
+      responses:
+        "200":
+          description: List of rejected submissions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BacsSubmission'
+
+  # BACS — Reports
+  /v1/payments/bacs/reports/{cycleDate}:
+    get:
+      summary: Get cycle reports
+      operationId: getCycleReports
+      tags: [BACS Reports]
+      parameters:
+        - name: cycleDate
+          in: path
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Submissions for cycle
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BacsSubmission'
+
+  /v1/payments/bacs/reports/{cycleDate}/summary:
+    get:
+      summary: Get cycle summary statistics
+      operationId: getCycleSummary
+      tags: [BACS Reports]
+      parameters:
+        - name: cycleDate
+          in: path
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cycle_date:
+                    type: string
+                    format: date
+                  total_submissions:
+                    type: integer
+                  total_volume:
+                    type: integer
+                  total_value:
+                    type: number
+
+  /v1/payments/bacs/reports/{cycleDate}/netting:
+    get:
+      summary: Get netting report
+      operationId: getNettingReport
+      tags: [BACS Reports]
+      parameters:
+        - name: cycleDate
+          in: path
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Full netting report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BacsNettingReport'
+
+  /v1/payments/bacs/reports/{cycleDate}/netting/{bic}:
+    get:
+      summary: Get netting report filtered by BIC
+      operationId: getNettingReportByBic
+      tags: [BACS Reports]
+      parameters:
+        - name: cycleDate
+          in: path
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: bic
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Filtered netting report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BacsNettingReport'
+
+  /v1/payments/bacs/reports/{cycleDate}/su/{bic}:
+    get:
+      summary: Get cycle reports filtered by Service User BIC
+      operationId: getCycleReportsForSU
+      tags: [BACS Reports]
+      parameters:
+        - name: cycleDate
+          in: path
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: bic
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Submissions for SU
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BacsSubmission'
+
+  /v1/payments/bacs/su/{bic}/reports:
+    get:
+      summary: Get all submissions for a Service User
+      operationId: getSuReports
+      tags: [BACS Reports]
+      parameters:
+        - name: bic
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Submissions for SU
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BacsSubmission'
+
+  # BACS — Limits
+  /v1/payments/bacs/limits:
+    get:
+      summary: Get BACS system limits
+      operationId: getBacsLimits
+      tags: [BACS Limits]
+      responses:
+        "200":
+          description: System limits
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  max_file_size:
+                    type: integer
+                    example: 1000000
+                  max_transactions_per_file:
+                    type: integer
+                    example: 100000
+                  max_submission_value:
+                    type: number
+                    example: 50000000.00
+                  total_system_liquidity:
+                    type: number
+                    example: 3050000.00
+                  settlement_cycle:
+                    type: string
+                    example: T+2
+                  currency:
+                    type: string
+                    example: GBP
+
+  /v1/payments/bacs/limits/{bic}:
+    patch:
+      summary: Update BACS participant overdraft limit
+      operationId: updateBacsLimit
+      tags: [BACS Limits]
+      parameters:
+        - $ref: '#/components/parameters/BicPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [overdraft_limit]
+              properties:
+                overdraft_limit:
+                  type: number
+                  format: float
+                  minimum: 0
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bic:
+                    type: string
+                  status:
+                    type: string
+                    example: LIMITS_UPDATED
+                  overdraft_limit:
+                    type: number
+
+  # BACS — Events
+  /v1/payments/bacs/incoming/{bic}:
+    get:
+      summary: SSE stream for real-time BACS cycle settlement events
+      operationId: bacsEvents
+      tags: [BACS Events]
+      parameters:
+        - $ref: '#/components/parameters/BicPath'
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                example: "data: {\"type\":\"cycle.settled\",\"data\":{\"scheme\":\"BACS\",\"status\":\"SETTLED\"}}\n\n"
+
+components:
+  parameters:
+    BicPath:
+      name: bic
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[A-Z0-9]{8,11}$"
+      description: Business Identifier Code (BIC)
+      example: BARCGB2L
+    BicQuery:
+      name: bic
+      in: query
+      schema:
+        type: string
+        pattern: "^[A-Z0-9]{8,11}$"
+      description: Business Identifier Code (BIC)
+      example: BARCGB2L
+    PaymentId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Payment msg_id (business message identifier)
+      example: PAY-001
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        default: 50
+        maximum: 200
+      description: Maximum records to return
+    StatusFilter:
+      name: status
+      in: query
+      schema:
+        type: string
+        enum: [PENDING, QUEUED, SETTLED, REJECTED]
+      description: Filter by payment status
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      schema:
+        type: string
+      description: Idempotency key for safe retry
+      required: false
+    DigitalSignature:
+      name: X-Digital-Signature
+      in: header
+      schema:
+        type: string
+      description: Digital signature (stub)
+      required: false
+    Origin:
+      name: Origin
+      in: header
+      schema:
+        type: string
+      description: CORS origin header
+
+  schemas:
+    # =========================================================================
+    # Participant schemas
+    # =========================================================================
+    ParticipantSummary:
+      type: object
+      properties:
+        bic:
+          type: string
+          example: BARCGB2L
+        name:
+          type: string
+          example: Barclays Bank
+        sort_code:
+          type: string
+          example: "20-00-00"
+        status:
+          type: string
+          enum: [ACTIVE, SUSPENDED, DISABLED]
+        balance:
+          type: number
+          format: float
+          example: 1000000.00
+        currency:
+          type: string
+          example: GBP
+        is_closed:
+          type: boolean
+        overdraft_limit:
+          type: number
+          format: float
+          example: 30000000.00
+        block_reason:
+          type: string
+          nullable: true
+        participant_type:
+          type: string
+          description: FPS-only
+          example: DIRECT
+        sponsor_bic:
+          type: string
+          nullable: true
+          description: FPS-only
+        is_service_user:
+          type: boolean
+          description: BACS-only
+        is_destination_user:
+          type: boolean
+          description: BACS-only
+        su_code:
+          type: string
+          description: BACS-only
+
+    Position:
+      type: object
+      properties:
+        bic:
+          type: string
+        balance:
+          type: number
+          format: float
+        earmarked:
+          type: number
+          format: float
+        available:
+          type: number
+          format: float
+
+    # =========================================================================
+    # Payment schemas
+    # =========================================================================
+    ChapsPaymentRequest:
+      type: object
+      required: [msg_id, sender_bic, receiver_bic, amount]
+      properties:
+        msg_id:
+          type: string
+          maxLength: 35
+          description: Unique business message identifier
+          example: PAY-001
+        end_to_end_id:
+          type: string
+          maxLength: 35
+          example: E2E-1001
+        sender_bic:
+          type: string
+          example: SNDRUK22
+        receiver_bic:
+          type: string
+          example: HSBCGB44
+        sender_sort_code:
+          type: string
+          description: UK sort code (optional)
+          example: "60-00-00"
+        receiver_sort_code:
+          type: string
+          description: UK sort code (optional)
+          example: "40-00-00"
+        amount:
+          type: number
+          format: float
+          minimum: 0.01
+          maximum: 20000000.00
+          description: Amount in GBP
+          example: 250.50
+
+    FpsPaymentRequest:
+      type: object
+      required: [msg_id, sender_bic, receiver_bic, amount]
+      properties:
+        msg_id:
+          type: string
+          maxLength: 35
+          example: FPS-20260603-001
+        end_to_end_id:
+          type: string
+          maxLength: 35
+          example: E2E-001
+        sender_bic:
+          type: string
+          example: BARCGB2L
+        receiver_bic:
+          type: string
+          example: HSBCGB44
+        sender_sort_code:
+          type: string
+          example: "20-00-00"
+        receiver_sort_code:
+          type: string
+          example: "40-00-00"
+        amount:
+          type: number
+          format: float
+          minimum: 0.01
+          maximum: 1000000.00
+          description: Amount in GBP
+          example: 250.00
+
+    PaymentResult:
+      type: object
+      properties:
+        msg_id:
+          type: string
+        status:
+          type: string
+          enum: [SETTLED, QUEUED, REJECTED]
+        iso_status:
+          type: string
+          enum: [ACTC, PDNG, RJCT]
+        reason_code:
+          type: string
+          example: ""
+
+    PaymentSummary:
+      type: object
+      properties:
+        msg_id:
+          type: string
+        sender_bic:
+          type: string
+        receiver_bic:
+          type: string
+        sender_sort_code:
+          type: string
+        receiver_sort_code:
+          type: string
+        amount:
+          type: number
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        payment_type:
+          type: string
+          description: FPS-only
+          example: SIP
+
+    PaymentValidation:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        checks:
+          type: array
+          items:
+            type: string
+          example: [BIC_FORMAT, PARTICIPANT_STATUS, LIQUIDITY]
+        errors:
+          type: array
+          items:
+            type: string
+        available:
+          type: number
+          format: float
+
+    ValidationRequest:
+      type: object
+      required: [sender_bic, receiver_bic, amount]
+      properties:
+        sender_bic:
+          type: string
+        receiver_bic:
+          type: string
+        amount:
+          type: number
+
+    ClearingLimits:
+      type: object
+      properties:
+        currency:
+          type: string
+          example: GBP
+        single_payment_limit:
+          type: number
+          format: float
+          description: "CHAPS: £20M, FPS: £1M"
+          example: 20000000.00
+        daily_participant_limit:
+          type: number
+          format: float
+          description: "CHAPS: £100M, FPS: £10M"
+          example: 100000000.00
+        total_available_liquidity:
+          type: number
+          format: float
+        remaining_intraday_liquidity:
+          type: number
+          format: float
+
+    # =========================================================================
+    # ISO 20022 XML schemas
+    # =========================================================================
+    ChapsXmlRequest:
+      type: object
+      description: |
+        ISO 20022 pacs.008 wrapped in a custom BizMsg envelope.
+        Validated against chaps_wrapper.xsd.
+      xml:
+        name: BizMsg
+      properties:
+        AppHdr:
+          type: object
+          properties:
+            Fr:
+              $ref: '#/components/schemas/XmlParty'
+            To:
+              $ref: '#/components/schemas/XmlParty'
+            BizMsgIdr:
+              type: string
+            MsgDefIdr:
+              type: string
+              example: pacs.008.001.14
+            CreDt:
+              type: string
+              format: date-time
+        Document:
+          type: object
+          description: pacs.008 FIToFICstmrCdtTrf
+          xml:
+            name: Document
+
+    Pacs002XmlResponse:
+      type: object
+      description: |
+        ISO 20022 pacs.002 payment status report wrapped in BizMsg envelope.
+      xml:
+        name: BizMsg
+      properties:
+        AppHdr:
+          type: object
+        Document:
+          type: object
+
+    XmlParty:
+      type: object
+      xml:
+        name: FIId
+      properties:
+        FIId:
+          type: object
+          properties:
+            FinInstnId:
+              type: object
+              properties:
+                BICFI:
+                  type: string
+
+    # =========================================================================
+    # ISO 8583 schemas
+    # =========================================================================
+    Iso8583Decoded:
+      type: object
+      properties:
+        MTI:
+          type: string
+          example: "0200"
+        DE2_PAN:
+          type: string
+        DE3_ProcCode:
+          type: string
+        DE4_Amount:
+          type: integer
+          description: Amount in pence
+        DE7_TransDateTime:
+          type: string
+        DE11_Trace:
+          type: integer
+        DE32_Acquirer:
+          type: string
+        DE37_RefNum:
+          type: string
+        DE39_ResponseCode:
+          type: string
+        DE41_TerminalID:
+          type: string
+        DE49_Currency:
+          type: string
+          example: GBP
+        DE100_Receiver:
+          type: string
+
+    Iso8583Field:
+      type: object
+      description: |
+        ISO 8583 binary message format for FPS.
+        Framed with 2-byte big-endian length prefix (max 4096 bytes).
+        Bitmap: primary (8 bytes) + optional secondary (8 bytes, signaled by bit 1).
+      properties:
+        MTI:
+          type: string
+          description: 4-digit numeric message type indicator
+          example: "0200"
+        DE2_PAN:
+          type: string
+          description: Primary Account Number (LLVAR)
+        DE3_ProcCode:
+          type: string
+          description: Processing code (6-digit N6)
+        DE4_Amount:
+          type: integer
+          description: Amount in pence (12-digit N12)
+          example: 25000
+        DE7_TransDateTime:
+          type: string
+          description: Transmission date/time (MMDDhhmmss)
+        DE11_Trace:
+          type: integer
+          description: Trace number (6-digit N6)
+        DE32_Acquirer:
+          type: string
+          description: Acquirer BIC (LLVAR)
+        DE37_RefNum:
+          type: string
+          description: Reference number (12 AN)
+        DE39_ResponseCode:
+          type: string
+          description: Response code (00=Approved, 51=Insufficient, 57=Not Permitted, 91=Out of Service)
+        DE41_TerminalID:
+          type: string
+          description: Terminal ID (8 AN)
+        DE49_Currency:
+          type: string
+          description: Currency code (3 AN, e.g. GBP)
+        DE100_Receiver:
+          type: string
+          description: Receiver BIC (LLVAR)
+
+    # =========================================================================
+    # FPS-specific schemas
+    # =========================================================================
+    StandingOrderRequest:
+      type: object
+      required: [reference, sender_bic, receiver_bic, amount, frequency, next_date]
+      properties:
+        reference:
+          type: string
+          maxLength: 35
+        sender_bic:
+          type: string
+        receiver_bic:
+          type: string
+        amount:
+          type: number
+          format: float
+        frequency:
+          type: string
+          enum: [DAILY, WEEKLY, MONTHLY, YEARLY]
+        next_date:
+          type: string
+          format: date
+        end_date:
+          type: string
+          format: date
+
+    StandingOrder:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        reference:
+          type: string
+        sender_bic:
+          type: string
+        receiver_bic:
+          type: string
+        amount:
+          type: number
+        frequency:
+          type: string
+        next_date:
+          type: string
+          format: date-time
+        end_date:
+          type: string
+          format: date-time
+        status:
+          type: string
+          example: ACTIVE
+
+    BulkSubmission:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        filename:
+          type: string
+        sender_bic:
+          type: string
+        total_items:
+          type: integer
+        total_value:
+          type: number
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    DnsCycle:
+      type: object
+      properties:
+        id:
+          type: integer
+        cycle_start:
+          type: string
+          format: date-time
+        cycle_end:
+          type: string
+          format: date-time
+        settled_at:
+          type: string
+          format: date-time
+          nullable: true
+        status:
+          type: string
+          enum: [OPEN, CLOSED]
+
+    # =========================================================================
+    # BACS-specific schemas
+    # =========================================================================
+    BacsSubmission:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        filename:
+          type: string
+        su_bic:
+          type: string
+        total_volume:
+          type: integer
+        total_value:
+          type: number
+        status:
+          type: string
+          enum: [RECEIVED, VALIDATED, PROCESSING, ACCEPTED, REJECTED, RECALLED]
+        cycle_id:
+          type: integer
+        error_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    BacsCycle:
+      type: object
+      properties:
+        id:
+          type: integer
+        input_date:
+          type: string
+          format: date
+        processing_date:
+          type: string
+          format: date
+        settlement_date:
+          type: string
+          format: date
+        status:
+          type: string
+          enum: [OPEN, PROCESSING, AWAITING_SETTLEMENT, SETTLED]
+
+    BacsMandate:
+      type: object
+      properties:
+        id:
+          type: integer
+        reference:
+          type: string
+        su_bic:
+          type: string
+        payer_name:
+          type: string
+        payer_sort_code:
+          type: string
+        payer_account:
+          type: string
+        amount:
+          type: number
+          format: float
+        frequency:
+          type: string
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    BacsNettingReport:
+      type: object
+      properties:
+        cycle_id:
+          type: integer
+        cycle_date:
+          type: string
+          format: date
+        cycle_status:
+          type: string
+        bilateral:
+          type: array
+          items:
+            type: object
+            properties:
+              debtor_bic:
+                type: string
+              creditor_bic:
+                type: string
+              gross_amount:
+                type: number
+              net_amount:
+                type: number
+        net_positions:
+          type: array
+          items:
+            type: object
+            properties:
+              bic:
+                type: string
+              net_position:
+                type: number
+              balance_before:
+                type: number
+              overdraft_limit:
+                type: number
+              status:
+                type: string
+                enum: [SETTLED, BLOCKED]
+
+    # =========================================================================
+    # Schedule schemas
+    # =========================================================================
+    ChapsSchedule:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+        opening_time:
+          type: string
+          example: "06:00"
+        interbank_cutoff:
+          type: string
+          example: "18:00"
+        timezone:
+          type: string
+          example: Europe/London
+        demo_session_minutes:
+          type: integer
+          example: 15
+
+    FpsSchedule:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+        opening_time:
+          type: string
+          example: "00:00"
+        closing_time:
+          type: string
+          example: "23:59"
+        settlement_times:
+          type: array
+          items:
+            type: string
+          example: ["03:00", "09:00", "12:00", "15:00", "18:00", "21:00"]
+        timezone:
+          type: string
+          example: Europe/London
+        demo_session_minutes:
+          type: integer
+          example: 15
+
+    BacsSchedule:
+      type: object
+      properties:
+        schedule:
+          type: array
+          items:
+            $ref: '#/components/schemas/BacsCycle'
+        current_date:
+          type: string
+          format: date
+        input_cutoff:
+          type: string
+          example: "22:30"
+        system:
+          type: string
+          example: BACS
+        settlement:
+          type: string
+          example: T+2
+        timezone:
+          type: string
+          example: Europe/London
+        demo_session_minutes:
+          type: integer
+          example: 15
+
+    # =========================================================================
+    # Standard 18 format description
+    # =========================================================================
+    Standard18File:
+      type: object
+      description: |
+        Fixed-width 80-column text format used for BACS submissions.
+
+        ## Record Types
+
+        **Record 1 — Volume Header**
+        | Pos | Len | Field | Format |
+        |---|---|---|---|
+        | 0 | 1 | Record type '1' | char |
+        | 1-7 | 7 | Volume number | int, right-padded |
+        | 8-16 | 9 | Dest sort code | string |
+        | 17-25 | 9 | Dest account | string |
+        | 55-65 | 11 | Total value (pence) | int, ÷100 |
+        | 66-72 | 7 | Total volume | int |
+        | 73-78 | 6 | Date (DDMMYY) | string |
+
+        **Record 3 — Direct Debit**
+        | Pos | Len | Field | Format |
+        |---|---|---|---|
+        | 0 | 1 | Record type '3' | char |
+        | 26-36 | 11 | Amount (pence) | int, ÷100 |
+        | 52 | 1 | Transaction type | char |
+        | 53-66 | 14 | Reference | string |
+        | 67-78 | 12 | SU code | string |
+
+        **Record 4 — Direct Credit**
+        | Pos | Len | Field | Format |
+        |---|---|---|---|
+        | 0 | 1 | Record type '4' | char |
+        | 26-36 | 11 | Amount (pence) | int, ÷100 |
+        | 52-65 | 14 | Payroll reference | string |
+
+        **Record 5 — Trailer Label**
+        | Pos | Len | Field | Format |
+        |---|---|---|---|
+        | 0 | 1 | Record type '5' | char |
+        | 48-55 | 8 | Record count | int |
+
+        **Record 9 — User Trailer**
+        | Pos | Len | Field | Format |
+        |---|---|---|---|
+        | 0 | 1 | Record type '9' | char |
+        | 20-30 | 11 | Total value (pence) | int, ÷100 |
+        | 31-39 | 9 | Total volume | int |
+        | 40-53 | 14 | Hash total | int |
+
+        **Record A — AUDDIS (Direct Debit Instruction)**
+        | Pos | Len | Field | Format |
+        |---|---|---|---|
+        | 0 | 1 | Record type 'A' | char |
+        | 8 | 1 | Instruction type | char (N=new, C=cancel) |
+        | 53-64 | 12 | Amount (pence) | int, ÷100 |
+      properties:
+        records:
+          type: array
+          items:
+            type: string
+            description: 80-column fixed-width line
+
+    # =========================================================================
+    # Event schemas
+    # =========================================================================
+    SseEvent:
+      type: object
+      description: Server-Sent Event payload
+      properties:
+        type:
+          type: string
+          enum: [payment.received, cycle.settled]
+        data:
+          type: object
+          properties:
+            msg_id:
+              type: string
+            sender:
+              type: string
+            receiver:
+              type: string
+            amount:
+              type: number
+            status:
+              type: string
+            scheme:
+              type: string
+              enum: [CHAPS, FPS, BACS]
+
+  responses:
+    BadRequest:
+      description: Bad Request
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: "Invalid BIC format: must be 8-11 alphanumeric characters"
+    NotFound:
+      description: Not Found
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: "Participant not found"
+    Conflict:
+      description: Conflict
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: "Payment not in amendable state"
+    InternalError:
+      description: Internal Server Error
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: "Internal server error"
+    UnsupportedMediaType:
+      description: Unsupported Media Type
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: "Unsupported Content-Type. Use application/json, application/xml, or application/octet-stream"
+    ServiceUnavailable:
+      description: Service Unavailable
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: "CHAPS opens at 06:00"
+
+tags:
+  - name: Participants
+    description: |
+      Participant management endpoints — shared across all three services.
+      Each service maintains its own independent participant database.
+  - name: Liquidity
+    description: Liquidity management — top-ups and balance queries
+  - name: System
+    description: System metadata and schedule configuration
+  - name: CHAPS Payments
+    description: |
+      CHAPS — Real-Time Gross Settlement.
+      - Single payment limit: £20,000,000.00
+      - Daily participant limit: £100,000,000.00
+      - Operating hours: 06:00 — 18:00
+      - Content types: JSON, ISO 20022 XML
+  - name: CHAPS Events
+    description: SSE real-time event stream for CHAPS payment notifications
+  - name: FPS Payments
+    description: |
+      FPS — Faster Payments, near-real-time.
+      - Single payment limit: £1,000,000.00
+      - Daily participant limit: £10,000,000.00
+      - Operating hours: configurable (default 00:00 — 23:59)
+      - Content types: JSON, ISO 20022 XML, ISO 8583 binary
+      - Deferred Net Settlement (DNS) cycles
+  - name: FPS Standing Orders
+    description: Recurring standing order management
+  - name: FPS Forward-Dated
+    description: Forward-dated (scheduled future) payments
+  - name: FPS Bulk
+    description: Bulk submission management
+  - name: FPS ISO 8583
+    description: |
+      ISO 8583 binary message processing.
+      - TCP socket on `:7421` with 2-byte big-endian length prefix
+      - Bitmap: primary (8 bytes) + optional secondary
+      - DE4 amounts in pence (÷100 for GBP)
+  - name: FPS DNS
+    description: Deferred Net Settlement cycle management
+  - name: FPS Liquidity
+    description: FPS-specific liquidity queries
+  - name: FPS Events
+    description: SSE real-time event stream for FPS payment notifications
+  - name: BACS Submissions
+    description: |
+      BACS — Batch submission of Standard 18 files.
+      - T+2 settlement cycle
+      - Fixed-width 80-column text format
+      - Multilateral netting at settlement
+  - name: BACS Cycles
+    description: |
+      BACS cycle state machine:
+      OPEN → PROCESSING → AWAITING_SETTLEMENT → SETTLED
+  - name: BACS Mandates
+    description: Direct Debit mandate (AUDDIS) management
+  - name: BACS Returns
+    description: ARUDD return processing
+  - name: BACS Reports
+    description: Cycle reports, netting reports, and summaries
+  - name: BACS Limits
+    description: BACS system limits and participant overdraft limits
+  - name: BACS Events
+    description: SSE real-time event stream for BACS cycle notifications
