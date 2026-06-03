@@ -13,10 +13,9 @@
       <h1><span data-scheme-name></span> - bank</h1>
       <div class="form-grid">
         <label>BIC banku <input id="loginBic" value="BARCGB2L" autocomplete="username" /></label>
-        <label>Hasło <input id="loginPassword" type="password" value="bank123" autocomplete="current-password" /></label>
       </div>
       <button type="submit">Zaloguj</button>
-      <p class="notice">Hasło demonstracyjne: bank123</p>
+      <p class="notice">Podaj BIC uczestnika bankowego.</p>
       <div class="status-strip"><span id="statusDot" class="dot"></span><strong id="message">Wymagane logowanie</strong></div>
     </form>
   </section>
@@ -38,13 +37,13 @@
         <div class="form-grid">
           <label>ID wiadomości <input id="msgId" /></label>
           <label>BIC nadawcy <input id="senderBic" readonly /></label>
-          <label>BIC odbiorcy <input id="receiverBic" value="HSBCGB44" /></label>
+          <label>Odbiorca BIC lub sort code <input id="receiverIdentifier" value="40-00-00" /></label>
           <label>Kwota <input id="amount" type="number" /></label>
         </div>
         <button type="submit">Wyślij płatność</button>
-        <pre id="validationResult" class="notice">Brak walidacji.</pre>
+        <div id="validationResult" class="notice result-panel">Brak walidacji.</div>
       </form>
-      <article class="panel"><h2>Szczegóły banku</h2><pre id="bankDetails">-</pre></article>
+      <article class="panel"><h2>Szczegóły banku</h2><div id="bankDetails" class="detail-sections">-</div></article>
     </section>
     <section class="panel wide">
       <h2>Płatności banku</h2>

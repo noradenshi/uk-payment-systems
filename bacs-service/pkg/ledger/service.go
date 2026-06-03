@@ -193,7 +193,17 @@ func (s *LedgerService) SettleCycle(ctx context.Context) ([]string, error) {
 	var bics []string
 	err := pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
 		var cycleID int
-		err := tx.QueryRow(ctx, `SELECT id FROM bacs_cycles WHERE status = 'AWAITING_SETTLEMENT' ORDER BY created_at DESC LIMIT 1 FOR UPDATE`).Scan(&cycleID)
+		err := tx.QueryRow(ctx, `
+			SELECT c.id
+			FROM bacs_cycles c
+			WHERE c.status = 'AWAITING_SETTLEMENT'
+			ORDER BY
+				CASE WHEN EXISTS (
+					SELECT 1 FROM bacs_submissions s
+					WHERE s.cycle_id = c.id AND s.status = 'ACCEPTED'
+				) THEN 0 ELSE 1 END,
+				c.created_at ASC
+			LIMIT 1 FOR UPDATE`).Scan(&cycleID)
 		if err != nil {
 			return err
 		}
@@ -250,36 +260,50 @@ func (s *LedgerService) SettleCycle(ctx context.Context) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
 
+		type participantSettlement struct {
+			bic            string
+			netAmount      float64
+			balance        float64
+			overdraftLimit float64
+		}
+		var settlements []participantSettlement
 		for rows.Next() {
-			var bic string
-			var netAmount, balance, overdraftLimit float64
-			if err := rows.Scan(&bic, &netAmount, &balance, &overdraftLimit); err != nil {
+			var item participantSettlement
+			if err := rows.Scan(&item.bic, &item.netAmount, &item.balance, &item.overdraftLimit); err != nil {
 				return err
 			}
-			bics = append(bics, bic)
+			settlements = append(settlements, item)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+
+		for _, item := range settlements {
+			bics = append(bics, item.bic)
 			status := "SETTLED"
-			if balance+netAmount < -overdraftLimit {
+			if item.balance+item.netAmount < -item.overdraftLimit {
 				status = "BLOCKED"
 				if _, err = tx.Exec(ctx, `
 					UPDATE participant_statuses
 					SET status='SUSPENDED', block_reason='BACS_SESSION_LIQUIDITY_SHORTFALL',
 					    blocked_at=NOW(), liquidity_breach_at=COALESCE(liquidity_breach_at, NOW()), updated_at=NOW()
-					WHERE bic_code=$1`, bic); err != nil {
+					WHERE bic_code=$1`, item.bic); err != nil {
 					return err
 				}
 			} else {
-				if _, err = tx.Exec(ctx, `UPDATE participant_liquidity SET balance = balance + $1, updated_at = NOW() WHERE bic_code = $2`, netAmount, bic); err != nil {
+				if _, err = tx.Exec(ctx, `UPDATE participant_liquidity SET balance = balance + $1, updated_at = NOW() WHERE bic_code = $2`, item.netAmount, item.bic); err != nil {
 					return err
 				}
-				if _, err = tx.Exec(ctx, `INSERT INTO bacs_journal_entries (submission_id, account_bic, amount) VALUES (NULL, $1, $2)`, bic, netAmount); err != nil {
+				if _, err = tx.Exec(ctx, `INSERT INTO bacs_journal_entries (submission_id, account_bic, amount) VALUES (NULL, $1, $2)`, item.bic, item.netAmount); err != nil {
 					return err
 				}
 			}
 			if _, err = tx.Exec(ctx, `
 				INSERT INTO bacs_net_positions (cycle_id, bic_code, net_position, balance_before, overdraft_limit, status)
-				VALUES ($1,$2,$3,$4,$5,$6)`, cycleID, bic, netAmount, balance, overdraftLimit, status); err != nil {
+				VALUES ($1,$2,$3,$4,$5,$6)`, cycleID, item.bic, item.netAmount, item.balance, item.overdraftLimit, status); err != nil {
 				return err
 			}
 		}

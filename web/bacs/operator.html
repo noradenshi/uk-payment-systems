@@ -33,21 +33,57 @@
         <button type="submit">Zarejestruj uczestnika</button>
       </form>
       <article class="panel">
-        <div class="panel-head"><div><p class="section-label">Kontrola</p><h2>Status, płynność, limity i cykl</h2></div></div>
-        <div class="form-grid">
-          <label>Bank/SU <select id="opsBic" data-participant-options></select></label>
-          <label>Status <select id="opsStatus"><option>ACTIVE</option><option>SUSPENDED</option><option>DISABLED</option></select></label>
-          <label>Powód <input id="opsReason" value="OPERATOR_CONTROL" /></label>
-          <label>Zasilenie <input id="topUpAmount" type="number" value="100000" /></label>
-          <label>Limit zadłużenia <input id="overdraftLimit" type="number" value="30000000" /></label>
-        </div>
-        <div class="button-row">
-          <button id="setStatus" class="secondary-button" type="button">Ustaw status</button>
-          <button id="blockParticipant" class="danger-button" type="button">Zablokuj</button>
-          <button id="unblockParticipant" class="secondary-button" type="button">Odblokuj</button>
-          <button id="topUp" class="secondary-button" type="button">Zasil</button>
-          <button id="updateLimit" class="secondary-button" type="button">Ustaw limit</button>
-          <button id="closeCycle" class="secondary-button" type="button">Zamknij cykl</button>
+        <div class="panel-head"><div><p class="section-label">Kontrola</p><h2>Operacje operatora BACS</h2></div></div>
+        <div class="control-stack">
+          <section class="control-block">
+            <div>
+              <p class="section-label">Uczestnik</p>
+              <h3>Status i blokady</h3>
+            </div>
+            <div class="form-grid">
+              <label>Bank/SU <select id="opsBic" data-participant-options></select></label>
+              <label>Status <select id="opsStatus"><option>ACTIVE</option><option>SUSPENDED</option><option>DISABLED</option></select></label>
+              <label class="wide">Powód <input id="opsReason" value="OPERATOR_CONTROL" /></label>
+            </div>
+            <div class="button-row">
+              <button id="setStatus" class="secondary-button" type="button">Ustaw status</button>
+              <button id="blockParticipant" class="danger-button" type="button">Zablokuj</button>
+              <button id="unblockParticipant" class="secondary-button" type="button">Odblokuj</button>
+            </div>
+          </section>
+
+          <section class="control-block">
+            <div>
+              <p class="section-label">Płynność</p>
+              <h3>Zasilenie i limit zadłużenia</h3>
+            </div>
+            <div class="form-grid">
+              <label>Zasilenie <input id="topUpAmount" type="number" value="100000" /></label>
+              <label>Limit zadłużenia <input id="overdraftLimit" type="number" value="30000000" /></label>
+            </div>
+            <div class="button-row">
+              <button id="topUp" class="secondary-button" type="button">Zasil uczestnika</button>
+              <button id="updateLimit" class="secondary-button" type="button">Ustaw limit</button>
+            </div>
+          </section>
+
+          <section class="control-block settlement-block">
+            <div>
+              <p class="section-label">Cykl BACS</p>
+              <h3>Przetwarzanie i rozliczenie</h3>
+            </div>
+            <div id="cycleOverview" class="cycle-overview">Ładowanie cykli...</div>
+            <ol class="cycle-steps">
+              <li><span>1</span> Zamknij przyjmowanie zgłoszeń w bieżącym cyklu.</li>
+              <li><span>2</span> Przetwórz zaakceptowane pliki do stanu oczekiwania na rozliczenie.</li>
+              <li><span>3</span> Rozlicz pozycje netto i zaktualizuj salda uczestników.</li>
+            </ol>
+            <div class="button-row">
+              <button id="closeCycle" class="secondary-button" type="button">Zamknij cykl</button>
+              <button id="processCycle" class="secondary-button" type="button">Przetwórz cykl</button>
+              <button id="settleCycle" class="secondary-button" type="button">Rozlicz cykl</button>
+            </div>
+          </section>
         </div>
       </article>
     </section>
@@ -55,7 +91,7 @@
       <article class="panel"><h2>Uczestnicy</h2><div class="table-wrap"><table><thead><tr><th>BIC</th><th>Nazwa</th><th>Status</th><th>Saldo</th><th>Limit</th></tr></thead><tbody id="participantsBody"></tbody></table></div></article>
       <article class="panel"><h2>Zgłoszenia BACS</h2><div class="table-wrap"><table><thead><tr><th>ID</th><th>SU</th><th>Odbiorca</th><th>Kwota</th><th>Status</th></tr></thead><tbody id="paymentsBody"></tbody></table></div></article>
     </section>
-    <section class="work-grid"><article class="panel"><h2>Limity systemu</h2><pre id="systemLimits">-</pre></article><article class="panel"><h2>Harmonogram</h2><pre id="systemSchedule">-</pre></article></section>
+    <section class="work-grid"><article class="panel"><h2>Limity systemu</h2><div id="systemLimits" class="info-list">-</div></article><article class="panel"><h2>Harmonogram</h2><div id="systemSchedule" class="info-list">-</div></article></section>
   </main>
   <script>window.UKPS_PAGE = { scheme: "bacs", role: "operator" };</script>
   <script src="../assets/ukps-pages.js"></script>

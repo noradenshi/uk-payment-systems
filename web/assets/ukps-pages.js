@@ -5,7 +5,7 @@ const schemes = {
     key: "chaps",
     name: "CHAPS",
     title: "CHAPS RTGS",
-    baseUrl: "http://localhost:8080",
+    baseUrl: "http://localhost:8420",
     paymentPath: "/v1/payments/chaps",
     limitsPath: "/v1/payments/chaps/limits",
     submitKind: "payment",
@@ -15,7 +15,7 @@ const schemes = {
     key: "fps",
     name: "FPS",
     title: "Faster Payments Service",
-    baseUrl: "http://localhost:8081",
+    baseUrl: "http://localhost:8421",
     paymentPath: "/v1/payments/fps",
     limitsPath: "/v1/payments/fps/limits",
     submitKind: "payment",
@@ -25,7 +25,7 @@ const schemes = {
     key: "bacs",
     name: "BACS",
     title: "BACS Standard 18",
-    baseUrl: "http://localhost:8082",
+    baseUrl: "http://localhost:8422",
     paymentPath: "/v1/payments/bacs/submit",
     limitsPath: "/v1/payments/bacs/limits",
     submitKind: "bacs",
@@ -36,6 +36,7 @@ const schemes = {
 const state = {
   participants: [],
   payments: [],
+  cycles: [],
   busy: false,
   user: null,
 };
@@ -54,6 +55,12 @@ function setText(id, value) {
   });
 }
 
+function setHTML(id, value) {
+  document.querySelectorAll(`#${id}`).forEach((node) => {
+    node.innerHTML = value;
+  });
+}
+
 function setBusy(value, message) {
   state.busy = value;
   document.querySelectorAll("#statusDot").forEach((dot) => {
@@ -67,7 +74,131 @@ function setBusy(value, message) {
 
 function statusPill(value) {
   const clean = String(value || "-");
-  return `<span class="pill ${clean.toLowerCase()}">${clean}</span>`;
+  const labels = {
+    ACCEPTED: "Przyjęte",
+    ACTIVE: "Aktywny",
+    AWAITING_SETTLEMENT: "Czeka na rozliczenie",
+    DISABLED: "Wyłączony",
+    OPEN: "Otwarty",
+    PROCESSING: "Przetwarzany",
+    RECALLED: "Wycofane",
+    REJECTED: "Odrzucone",
+    SETTLED: "Rozliczone",
+    SUSPENDED: "Zawieszony",
+  };
+  return `<span class="pill ${clean.toLowerCase()}">${labels[clean] || clean}</span>`;
+}
+
+function escapeHTML(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+const infoLabels = {
+  closing_time: "Zamknięcie",
+  currency: "Waluta",
+  daily_participant_limit: "Limit dzienny uczestnika",
+  date: "Data",
+  demo_session_minutes: "Sesja demo",
+  available: "Dostępne środki",
+  balance: "Saldo",
+  bilateral: "Pozycje bilateralne",
+  bic: "BIC",
+  checks: "Kontrole",
+  checks_passed: "Kontrole",
+  cycle_date: "Data cyklu",
+  cycle_id: "ID cyklu",
+  cycle_status: "Status cyklu",
+  earmarked: "Zarezerwowane",
+  errors: "Błędy",
+  is_closed: "Zamknięty",
+  max_file_size: "Maks. rozmiar pliku",
+  max_submission_value: "Maks. wartość zgłoszenia",
+  max_transactions_per_file: "Maks. transakcji w pliku",
+  name: "Nazwa",
+  net_positions: "Pozycje netto",
+  overdraft_limit: "Limit debetu",
+  participant_type: "Typ uczestnika",
+  reason_code: "Kod powodu",
+  input_cutoff: "Koniec przyjmowania",
+  interbank_cutoff: "Koniec międzybankowy",
+  opening_time: "Otwarcie",
+  remaining_intraday_liquidity: "Pozostała płynność",
+  settlement_duration_minutes: "Czas rozliczenia",
+  settlement_cycle: "Cykl rozliczenia",
+  single_payment_limit: "Limit pojedynczej płatności",
+  sort_code: "Sort code",
+  status: "Status",
+  timezone: "Strefa czasowa",
+  total_available_liquidity: "Dostępna płynność",
+  total_system_liquidity: "Płynność systemu",
+  valid: "Wynik",
+};
+
+function formatInfoValue(key, value) {
+  if (value == null || value === "" || value === "<nil>") return "-";
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "-";
+    if (value.every((item) => item == null || ["string", "number", "boolean"].includes(typeof item))) {
+      return `<span class="tag-list">${value.map((item) => `<span>${escapeHTML(item)}</span>`).join("")}</span>`;
+    }
+    return `<span class="muted-value">${value.length} pozycji</span>`;
+  }
+  if (typeof value === "object") return `<span class="muted-value">Dane szczegółowe</span>`;
+  if (typeof value === "boolean") return value ? "Tak" : "Nie";
+  if (key === "valid") return value ? "Poprawna" : "Niepoprawna";
+  if (key === "status") return statusPill(value);
+  if (
+    key.includes("amount") ||
+    key.includes("available") ||
+    key.includes("balance") ||
+    key.includes("earmarked") ||
+    key.includes("limit") ||
+    key.includes("liquidity")
+  ) {
+    return money.format(Number(value));
+  }
+  if (key.includes("minutes")) return `${value} min`;
+  return escapeHTML(value);
+}
+
+function renderInfoList(data, emptyText, preferredKeys = null) {
+  if (!data || typeof data !== "object") {
+    return `<p class="empty-state">${escapeHTML(emptyText)}</p>`;
+  }
+  const rawEntries = preferredKeys
+    ? preferredKeys.filter((key) => Object.prototype.hasOwnProperty.call(data, key)).map((key) => [key, data[key]])
+    : Object.entries(data);
+  const entries = rawEntries.filter(([, value]) => value != null && value !== "" && value !== "<nil>");
+  if (entries.length === 0) {
+    return `<p class="empty-state">${escapeHTML(emptyText)}</p>`;
+  }
+  return `<dl>${entries
+    .map(([key, value]) => `<div><dt>${infoLabels[key] || escapeHTML(key)}</dt><dd>${formatInfoValue(key, value)}</dd></div>`)
+    .join("")}</dl>`;
+}
+
+function renderDetailSection(title, data, keys) {
+  return `<section class="detail-section">
+    <h3>${escapeHTML(title)}</h3>
+    <div class="info-list compact">${renderInfoList(data, "Brak danych.", keys)}</div>
+  </section>`;
+}
+
+function renderBankDetails(participant, position, limits) {
+  return [
+    renderDetailSection("Uczestnik", participant, ["bic", "name", "sort_code", "participant_type", "status", "is_closed"]),
+    renderDetailSection("Pozycja", position, ["balance", "earmarked", "available"]),
+    renderDetailSection("Limity", limits, ["currency", "single_payment_limit", "daily_participant_limit", "total_available_liquidity", "remaining_intraday_liquidity", "overdraft_limit"]),
+  ].join("");
+}
+
+function renderResult(data, emptyText) {
+  if (!data || typeof data !== "object") return escapeHTML(emptyText);
+  return `<div class="info-list compact">${renderInfoList(data, emptyText)}</div>`;
 }
 
 async function api(path, options = {}) {
@@ -89,10 +220,10 @@ async function api(path, options = {}) {
 }
 
 async function centralTopUp(bic, amount) {
-  const response = await fetch("http://localhost:8090/v1/central-bank/top-up", {
+  const response = await fetch(`${scheme.baseUrl}/v1/liquidity/top-up`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ system: scheme.key, bic, amount, source: "BANK_OF_ENGLAND" }),
+    body: JSON.stringify({ bic, amount }),
   });
   if (!response.ok) throw new Error(await response.text());
   return response.json();
@@ -107,7 +238,9 @@ function paymentSender(item) {
 }
 
 function paymentReceiver(item) {
-  return item.receiver_bic || item.creditor_bic || "";
+  const sortCode = item.receiver_sort_code || item.dest_sort_code || "";
+  const bic = item.receiver_bic || item.creditor_bic || "";
+  return sortCode ? `${bic} (${sortCode})` : bic;
 }
 
 function paymentAmount(item) {
@@ -118,19 +251,51 @@ function paymentStatus(item) {
   return item.status || item.iso_status || "-";
 }
 
+function bacsSettlementStatus(item) {
+  if (scheme.key !== "bacs" || !item.cycle_id || paymentStatus(item) !== "ACCEPTED") {
+    return paymentStatus(item);
+  }
+  const cycle = state.cycles.find((entry) => Number(entry.id) === Number(item.cycle_id));
+  if (!cycle) return paymentStatus(item);
+  if (cycle.status === "SETTLED") return "SETTLED";
+  if (cycle.status === "AWAITING_SETTLEMENT") return "AWAITING_SETTLEMENT";
+  if (cycle.status === "PROCESSING") return "PROCESSING";
+  return paymentStatus(item);
+}
+
 function bankMatches(item, bic) {
   const sender = paymentSender(item);
-  const receiver = paymentReceiver(item);
+  const receiver = item.receiver_bic || item.creditor_bic || "";
   return !sender || sender === bic || receiver === bic;
 }
 
+function normalizeSortCode(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (digits.length !== 6) return "";
+  return `${digits.slice(0, 2)}-${digits.slice(2, 4)}-${digits.slice(4, 6)}`;
+}
+
+function findParticipantBySortCode(sortCode) {
+  const normalized = normalizeSortCode(sortCode);
+  if (!normalized) return null;
+  return state.participants.find((participant) => normalizeSortCode(participant.sort_code) === normalized) || null;
+}
+
+function findParticipantByBicOrSortCode(value) {
+  const clean = String(value || "").trim().toUpperCase();
+  if (!clean) return null;
+  return state.participants.find((participant) => participant.bic === clean) || findParticipantBySortCode(clean);
+}
+
 async function loadCoreData() {
-  const [participants, payments] = await Promise.all([
+  const [participants, payments, cycles] = await Promise.all([
     api("/v1/participants"),
     api(`${scheme.paymentPath}?limit=100`).catch(() => []),
+    scheme.key === "bacs" ? api("/v1/payments/bacs/cycle").catch(() => []) : Promise.resolve([]),
   ]);
   state.participants = Array.isArray(participants) ? participants : [];
   state.payments = Array.isArray(payments) ? payments : [];
+  state.cycles = Array.isArray(cycles) ? cycles : [];
 }
 
 function renderParticipantOptions(selectedBic) {
@@ -172,9 +337,44 @@ function renderPayments(items = state.payments) {
       <td>${paymentSender(p)}</td>
       <td>${paymentReceiver(p)}</td>
       <td>${money.format(paymentAmount(p))}</td>
-      <td>${statusPill(paymentStatus(p))}</td>
+      <td>${statusPill(bacsSettlementStatus(p))}</td>
     </tr>`)
     .join("");
+}
+
+function renderCycleOverview(cycles) {
+  const target = $("cycleOverview");
+  if (!target) return;
+  if (!Array.isArray(cycles) || cycles.length === 0) {
+    target.innerHTML = `<p class="empty-state">Brak danych cykli.</p>`;
+    return;
+  }
+
+  const paymentCycleIds = new Set(state.payments.map((payment) => Number(payment.cycle_id)).filter(Boolean));
+  const recentCycles = cycles.slice(0, 3);
+  const recentIds = new Set(recentCycles.map((cycle) => Number(cycle.id)));
+  const paymentCycles = cycles
+    .filter((cycle) => paymentCycleIds.has(Number(cycle.id)) && !recentIds.has(Number(cycle.id)))
+    .slice(0, 3);
+  const renderCycleCard = (cycle) => `<article>
+    <span>Cykl ${escapeHTML(cycle.id)}</span>
+    ${statusPill(cycle.status)}
+    <small>${escapeHTML(cycle.input_date)} -> ${escapeHTML(cycle.settlement_date)}</small>
+  </article>`;
+
+  target.innerHTML = `
+    <p class="cycle-group-title">Najnowsze cykle</p>
+    <div class="cycle-summary">
+      ${recentCycles.map(renderCycleCard).join("")}
+    </div>
+    ${paymentCycles.length ? `
+      <p class="cycle-group-title">Cykle ze zgłoszeniami</p>
+      <div class="cycle-summary">
+        ${paymentCycles.map(renderCycleCard).join("")}
+      </div>
+    ` : ""}
+    <p class="cycle-help">Zamknięcie cyklu zawsze otwiera nowy cykl OPEN. Zgłoszenia z poprzedniego cyklu przechodzą dalej: PROCESSING -> AWAITING_SETTLEMENT -> SETTLED.</p>
+  `;
 }
 
 async function refreshOperator() {
@@ -186,15 +386,16 @@ async function refreshOperator() {
     renderParticipantOptions($("opsBic")?.value || state.participants[0]?.bic);
     const limits = await api(scheme.limitsPath).catch(() => null);
     const schedule = await api("/v1/system/schedule").catch(() => null);
-    const settled = state.payments.filter((p) => ["SETTLED", "ACTC", "COMPLETED"].includes(paymentStatus(p))).length;
-    const queued = state.payments.filter((p) => ["QUEUED", "PENDING", "RECEIVED", "PROCESSING", "PDNG"].includes(paymentStatus(p))).length;
-    const rejected = state.payments.filter((p) => ["REJECTED", "RJCT", "RECALLED"].includes(paymentStatus(p))).length;
+    const settled = state.payments.filter((p) => ["SETTLED", "ACTC", "COMPLETED"].includes(bacsSettlementStatus(p))).length;
+    const queued = state.payments.filter((p) => ["QUEUED", "PENDING", "RECEIVED", "PROCESSING", "AWAITING_SETTLEMENT", "PDNG"].includes(bacsSettlementStatus(p))).length;
+    const rejected = state.payments.filter((p) => ["REJECTED", "RJCT", "RECALLED"].includes(bacsSettlementStatus(p))).length;
     setText("metricParticipants", String(state.participants.length));
     setText("metricSettled", String(settled));
     setText("metricQueued", String(queued));
     setText("metricRejected", String(rejected));
-    setText("systemLimits", limits ? JSON.stringify(limits, null, 2) : "Brak danych limitów.");
-    setText("systemSchedule", schedule ? JSON.stringify(schedule, null, 2) : "Brak danych harmonogramu.");
+    setHTML("systemLimits", renderInfoList(limits, "Brak danych limitów."));
+    setHTML("systemSchedule", renderInfoList(schedule, "Brak danych harmonogramu."));
+    renderCycleOverview(state.cycles);
     setBusy(false, "Dane odświeżone");
   } catch (error) {
     setBusy(false, `Błąd: ${error.message}`);
@@ -218,7 +419,7 @@ async function refreshBank() {
     setText("metricAvailable", position?.available != null ? money.format(Number(position.available)) : money.format(balance + overdraft));
     setText("metricLimit", limits?.single_payment_limit != null ? money.format(Number(limits.single_payment_limit)) : money.format(overdraft));
     setText("metricBankPayments", String(bankPayments.length));
-    setText("bankDetails", JSON.stringify({ participant, position, limits }, null, 2));
+    setHTML("bankDetails", renderBankDetails(participant, position, limits));
     renderPayments(bankPayments);
     renderParticipantOptions(bic);
     if ($("senderBic")) $("senderBic").value = bic;
@@ -240,10 +441,20 @@ async function jsonAction(label, action, after) {
 }
 
 function buildPaymentPayload() {
+  const senderBic = $("senderBic").value.trim().toUpperCase();
+  const sender = state.participants.find((participant) => participant.bic === senderBic);
+  const receiver = findParticipantByBicOrSortCode($("receiverIdentifier")?.value);
+  if (!receiver) {
+    throw new Error("Nie znaleziono odbiorcy o podanym BIC lub sort code.");
+  }
+  const receiverSortCode = normalizeSortCode(receiver.sort_code);
+
   return {
     msg_id: $("msgId").value.trim(),
-    sender_bic: $("senderBic").value.trim().toUpperCase(),
-    receiver_bic: $("receiverBic").value.trim().toUpperCase(),
+    sender_bic: senderBic,
+    receiver_bic: receiver.bic,
+    sender_sort_code: normalizeSortCode(sender?.sort_code),
+    receiver_sort_code: receiverSortCode,
     amount: Number($("amount").value),
   };
 }
@@ -252,8 +463,8 @@ function standard18Sample() {
   const spaces = (n) => " ".repeat(n);
   const lpad = (value, length) => String(value).padStart(length, " ");
   const rpad = (value, length) => String(value).padEnd(length, " ");
-  const rec1 = "1" + lpad("1", 7) + rpad("654321", 9) + rpad("01234567", 9) + spaces(29) + lpad("10000", 11) + lpad("1", 7) + "260526" + " ";
-  const rec3 = "3" + lpad("1", 7) + rpad("654321", 9) + rpad("01234567", 9) + lpad("10000", 11) + rpad("ORIGINATOR", 15) + "1" + rpad("REF", 14) + rpad("XX1", 12) + " ";
+  const rec1 = "1" + lpad("1", 7) + rpad("400000", 9) + rpad("01234567", 9) + spaces(29) + lpad("10000", 11) + lpad("1", 7) + "260526" + " ";
+  const rec3 = "3" + lpad("1", 7) + rpad("400000", 9) + rpad("01234567", 9) + lpad("10000", 11) + rpad("ORIGINATOR", 15) + "1" + rpad("REF", 14) + rpad("XX1", 12) + " ";
   const rec5 = "5" + lpad("1", 7) + spaces(40) + lpad("1", 8) + spaces(24);
   const rec9 = "9" + lpad("1", 7) + spaces(12) + lpad("10000", 11) + lpad("1", 9) + lpad("10", 14) + spaces(26);
   return [
@@ -306,6 +517,12 @@ function setupOperatorEvents() {
   $("closeCycle")?.addEventListener("click", () => jsonAction("Zamknięcie cyklu", () => api("/v1/payments/bacs/cycle/close", {
     method: "POST",
   }), refreshOperator));
+  $("processCycle")?.addEventListener("click", () => jsonAction("Przetworzenie cyklu", () => api("/v1/payments/bacs/cycle/process", {
+    method: "POST",
+  }), refreshOperator));
+  $("settleCycle")?.addEventListener("click", () => jsonAction("Rozliczenie cyklu", () => api("/v1/payments/bacs/cycle/settle", {
+    method: "POST",
+  }), refreshOperator));
 }
 
 function setupBankEvents() {
@@ -315,10 +532,8 @@ function setupBankEvents() {
     try {
       await loadCoreData();
       const bic = $("loginBic").value.trim().toUpperCase();
-      const password = $("loginPassword").value;
       const exists = state.participants.some((item) => item.bic === bic);
       if (!exists) throw new Error("Nie znaleziono banku o podanym BIC.");
-      if (password !== "bank123") throw new Error("Nieprawidłowe hasło demonstracyjne.");
       state.user = { bic };
       sessionStorage.setItem(`ukps-${scheme.key}-bank`, JSON.stringify(state.user));
       $("loginScreen").classList.add("hidden");
@@ -341,7 +556,7 @@ function setupBankEvents() {
     if (scheme.submitKind === "bacs") {
       const content = $("standard18").value.trim();
       const su = state.user.bic;
-      jsonAction("Wysłanie pliku BACS", () => api(`${scheme.paymentPath}?su_bic=${encodeURIComponent(su)}&filename=bank-submission.txt`, {
+      jsonAction("Przyjęcie pliku BACS do cyklu", () => api(`${scheme.paymentPath}?su_bic=${encodeURIComponent(su)}&filename=bank-submission.txt`, {
         method: "POST",
         headers: { "Content-Type": "text/plain" },
         body: content,
@@ -356,7 +571,7 @@ function setupBankEvents() {
   });
   $("validatePayment")?.addEventListener("click", () => {
     if (scheme.submitKind === "bacs") {
-      setText("validationResult", "BACS waliduje plik Standard 18 podczas wysyłki.");
+      setHTML("validationResult", "BACS waliduje plik Standard 18 podczas wysyłki.");
       return;
     }
     jsonAction("Walidacja płatności", async () => {
@@ -365,14 +580,14 @@ function setupBankEvents() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(buildPaymentPayload()),
       });
-      setText("validationResult", JSON.stringify(result, null, 2));
+      setHTML("validationResult", renderResult(result, "Brak walidacji."));
     }, null);
   });
   $("loadNetting")?.addEventListener("click", async () => {
     const date = $("cycleDate").value || today;
     jsonAction("Pobranie raportu", async () => {
       const report = await api(`/v1/payments/bacs/reports/${date}/netting/${state.user.bic}`);
-      setText("nettingResult", JSON.stringify(report, null, 2));
+      setHTML("nettingResult", renderResult(report, "Brak raportu."));
     }, null);
   });
 }

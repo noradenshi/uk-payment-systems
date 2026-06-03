@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>UKPS - strony serwisów</title>
+  <title>UKPS - widok projektu</title>
   <link rel="stylesheet" href="assets/ukps-pages.css" />
 </head>
 <body>
@@ -11,34 +11,109 @@
     <section class="topbar">
       <div>
         <p class="eyebrow">UK Payment Systems</p>
-        <h1>Osobne strony CHAPS, FPS i BACS</h1>
+        <h1>Główny widok projektu</h1>
+      </div>
+      <div class="status-strip"><span class="dot"></span><strong>CHAPS 8420 / FPS 8421 / BACS 8422</strong></div>
+    </section>
+
+    <section class="project-overview">
+      <article class="overview-panel">
+        <p class="section-label">Zakres</p>
+        <h2>Jeden ekran startowy dla wszystkich paneli</h2>
+        <p>Wybierz serwis i rolę. Karty operatora prowadzą do zarządzania uczestnikami, limitami i kolejką systemową, a karty banku do pracy w kontekście konkretnego uczestnika.</p>
+      </article>
+      <article class="overview-panel compact">
+        <p class="section-label">Serwisy</p>
+        <dl class="detail-list">
+          <div><dt>CHAPS</dt><dd>RTGS wysokokwotowy</dd></div>
+          <div><dt>FPS</dt><dd>Płatności natychmiastowe</dd></div>
+          <div><dt>BACS</dt><dd>Pliki Standard 18</dd></div>
+        </dl>
+      </article>
+    </section>
+
+    <section class="service-section" aria-labelledby="chaps-title">
+      <div class="service-head">
+        <div>
+          <p class="section-label">Serwis płatniczy</p>
+          <h2 id="chaps-title">CHAPS</h2>
+        </div>
+        <span>RTGS dla płatności wysokokwotowych, limitów płynności i blokad uczestników.</span>
+      </div>
+      <div class="role-card-grid">
+        <article class="link-card role-card">
+          <div>
+            <p class="section-label">Operator</p>
+            <h3>Kontrola systemu CHAPS</h3>
+            <p>Uczestnicy, statusy, blokady, limity, pozycje i kolejka rozliczeń.</p>
+          </div>
+          <a class="link-button" href="chaps/operator.html">Otwórz operatora</a>
+        </article>
+        <article class="link-card role-card">
+          <div>
+            <p class="section-label">Bank</p>
+            <h3>Panel banku CHAPS</h3>
+            <p>Logowanie banku, wysyłka płatności, walidacja i widok pozycji.</p>
+          </div>
+          <a class="link-button secondary-button" href="chaps/bank.html">Otwórz bank</a>
+        </article>
       </div>
     </section>
-    <section class="home-grid">
-      <article class="link-card">
-        <h2>CHAPS</h2>
-        <p>RTGS dla płatności wysokokwotowych, uczestników, blokad i limitów płynności.</p>
-        <div class="page-links">
-          <a class="link-button" href="chaps/operator.html">Operator</a>
-          <a class="link-button secondary-button" href="chaps/bank.html">Pracownik banku</a>
+
+    <section class="service-section" aria-labelledby="fps-title">
+      <div class="service-head">
+        <div>
+          <p class="section-label">Serwis płatniczy</p>
+          <h2 id="fps-title">FPS</h2>
         </div>
-      </article>
-      <article class="link-card">
-        <h2>FPS</h2>
-        <p>Płatności natychmiastowe, kolejka, prefunding, DNS i obsługa pozycji banku.</p>
-        <div class="page-links">
-          <a class="link-button" href="fps/operator.html">Operator</a>
-          <a class="link-button secondary-button" href="fps/bank.html">Pracownik banku</a>
+        <span>Płatności natychmiastowe, prefunding, DNS i obsługa pozycji banku.</span>
+      </div>
+      <div class="role-card-grid">
+        <article class="link-card role-card">
+          <div>
+            <p class="section-label">Operator</p>
+            <h3>Kontrola systemu FPS</h3>
+            <p>Uczestnicy, limity, statusy, zasilenia i kolejka płatności.</p>
+          </div>
+          <a class="link-button" href="fps/operator.html">Otwórz operatora</a>
+        </article>
+        <article class="link-card role-card">
+          <div>
+            <p class="section-label">Bank</p>
+            <h3>Panel banku FPS</h3>
+            <p>Wysyłka płatności natychmiastowej, walidacja i saldo banku.</p>
+          </div>
+          <a class="link-button secondary-button" href="fps/bank.html">Otwórz bank</a>
+        </article>
+      </div>
+    </section>
+
+    <section class="service-section" aria-labelledby="bacs-title">
+      <div class="service-head">
+        <div>
+          <p class="section-label">Serwis płatniczy</p>
+          <h2 id="bacs-title">BACS</h2>
         </div>
-      </article>
-      <article class="link-card">
-        <h2>BACS</h2>
-        <p>Pliki Standard 18, service users, cykle wejściowe, raporty i netting.</p>
-        <div class="page-links">
-          <a class="link-button" href="bacs/operator.html">Operator</a>
-          <a class="link-button secondary-button" href="bacs/bank.html">Pracownik banku</a>
-        </div>
-      </article>
+        <span>Pliki Standard 18, service users, cykle wejściowe, raporty i netting.</span>
+      </div>
+      <div class="role-card-grid">
+        <article class="link-card role-card">
+          <div>
+            <p class="section-label">Operator</p>
+            <h3>Kontrola systemu BACS</h3>
+            <p>Service users, cykle, raporty, statusy i zamykanie przetwarzania.</p>
+          </div>
+          <a class="link-button" href="bacs/operator.html">Otwórz operatora</a>
+        </article>
+        <article class="link-card role-card">
+          <div>
+            <p class="section-label">Bank</p>
+            <h3>Panel banku BACS</h3>
+            <p>Wysyłka pliku Standard 18, historia pozycji i raport nettingu.</p>
+          </div>
+          <a class="link-button secondary-button" href="bacs/bank.html">Otwórz bank</a>
+        </article>
+      </div>
     </section>
   </main>
 </body>
