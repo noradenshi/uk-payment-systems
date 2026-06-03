@@ -271,7 +271,7 @@ Set `"mode": "demo"` or `"mode": "production"` per service in `sessions.json`:
 | `settlement_duration_minutes` | BACS | ✅ Drives `AdvanceCycles` + `CloseInputDay` |
 | `opening_time` | FPS, CHAPS | ✅ Gates payment processing via `checkOperatingHours` / `checkCHAPSHours` |
 | `closing_time` | FPS | ✅ Gates payment processing via `checkOperatingHours` |
-| `customer_cutoff` | CHAPS | Display only in `/v1/system/schedule` |
+| `customer_cutoff` | CHAPS | ℹ️ Informational — enforced by participant banks, not the central system |
 | `interbank_cutoff` | CHAPS | ✅ Gates payment processing via `checkCHAPSHours` |
 | `input_cutoff` | BACS | ✅ Gates file submissions via `checkInputCutoff` |
 
