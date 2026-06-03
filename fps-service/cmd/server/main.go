@@ -12,9 +12,16 @@ import (
 	"fps-service/pkg/events"
 	"fps-service/pkg/ledger"
 	"fps-service/pkg/server"
+	"fps-service/pkg/validator"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func registerXSD(reg *validator.ValidatorRegistry, file string) {
+	if err := reg.Register(file, "xsd/"+file+".xsd"); err != nil {
+		log.Fatalf("Fatal: %v", err)
+	}
+}
 
 func main() {
 	ctx := context.Background()
@@ -36,9 +43,17 @@ func main() {
 	}
 	log.Println("Database connected")
 
+	reg := validator.NewValidatorRegistry()
+	registerXSD(reg, "pacs.008.001.14")
+	registerXSD(reg, "pacs.002.001.16")
+	registerXSD(reg, "head.001.001.02")
+	registerXSD(reg, "head.001.001.04")
+	registerXSD(reg, "chaps_wrapper")
+
 	srv := &server.Server{
-		Ledger: ledger.NewLedgerService(pool),
-		Events: events.NewEventBus(),
+		Validator: reg,
+		Ledger:    ledger.NewLedgerService(pool),
+		Events:    events.NewEventBus(),
 	}
 
 	schedCtx, schedCancel := context.WithCancel(context.Background())
