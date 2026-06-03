@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bacs-service/pkg/events"
 	"bacs-service/pkg/ledger"
 	"bacs-service/pkg/standard18"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -15,6 +17,7 @@ import (
 
 type Server struct {
 	Ledger *ledger.LedgerService
+	Events *events.EventBus
 }
 
 var reBIC = regexp.MustCompile(`^[A-Z0-9]{8,11}$`)
@@ -32,6 +35,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/payments/bacs/cycle/{cycleDate}", s.handleGetCycleByDate)
 	mux.HandleFunc("GET /v1/payments/bacs/cycle", s.handleListCycles)
 	mux.HandleFunc("POST /v1/payments/bacs/cycle/close", s.handleCloseInputDay)
+	mux.HandleFunc("POST /v1/payments/bacs/cycle/process", s.handleProcessCycle)
+	mux.HandleFunc("POST /v1/payments/bacs/cycle/settle", s.handleSettleCycle)
 
 	// Participant Management
 	mux.HandleFunc("GET /v1/participants", s.handleListParticipants)
@@ -62,6 +67,9 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/payments/bacs/reports/{cycleDate}/netting", s.handleNettingReport)
 	mux.HandleFunc("GET /v1/payments/bacs/reports/{cycleDate}/netting/{bic}", s.handleNettingReportForBIC)
 	mux.HandleFunc("GET /v1/payments/bacs/su/{bic}/reports", s.handleSUReports)
+
+	// Events
+	mux.HandleFunc("GET /v1/payments/bacs/incoming/{bic}", s.handleEvents)
 
 	// Limits & Controls
 	mux.HandleFunc("GET /v1/payments/bacs/limits", s.handleGetLimits)
@@ -343,6 +351,69 @@ func (s *Server) handleCloseInputDay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "PROCESSING"})
+}
+
+func (s *Server) handleProcessCycle(w http.ResponseWriter, r *http.Request) {
+	if err := s.Ledger.ProcessCycle(r.Context()); err != nil {
+		log.Printf("ProcessCycle error: %v", err)
+		http.Error(w, "Failed to process cycle", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "AWAITING_SETTLEMENT"})
+}
+
+func (s *Server) handleSettleCycle(w http.ResponseWriter, r *http.Request) {
+	affectedBICs, err := s.Ledger.SettleCycle(r.Context())
+	if err != nil {
+		log.Printf("SettleCycle error: %v", err)
+		http.Error(w, "Failed to settle cycle", http.StatusInternalServerError)
+		return
+	}
+	for _, bic := range affectedBICs {
+		s.Events.Publish(bic, events.Event{
+			Type: "cycle.settled",
+			Data: map[string]interface{}{
+				"scheme": "BACS",
+				"status": "SETTLED",
+			},
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "SETTLED"})
+}
+
+func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	bic := r.PathValue("bic")
+	if bic == "" || !validateBIC(bic) {
+		badRequest(w, "Valid BIC required")
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	ch, unsubscribe := s.Events.Subscribe(bic, 100)
+	defer unsubscribe()
+
+	for {
+		select {
+		case event := <-ch:
+			data, err := json.Marshal(event)
+			if err != nil {
+				continue
+			}
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
 
 // ── Participant Handlers ──

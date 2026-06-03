@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"chaps-service/pkg/events"
 	"chaps-service/pkg/ledger"
 	"chaps-service/pkg/server"
 	"chaps-service/pkg/validator"
@@ -52,6 +53,7 @@ func main() {
 	srv := &server.Server{
 		Validator: reg,
 		Ledger:    ledger.NewLedgerService(pool),
+		Events:    events.NewEventBus(),
 	}
 
 	mux := http.NewServeMux()

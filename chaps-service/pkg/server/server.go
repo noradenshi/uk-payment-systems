@@ -1,6 +1,7 @@
 package server
 
 import (
+	"chaps-service/pkg/events"
 	"chaps-service/pkg/iso20022"
 	"chaps-service/pkg/ledger"
 	"chaps-service/pkg/validator"
@@ -21,6 +22,7 @@ import (
 type Server struct {
 	Validator *validator.ValidatorRegistry
 	Ledger    *ledger.LedgerService
+	Events    *events.EventBus
 }
 
 var reBIC = regexp.MustCompile(`^[A-Z0-9]{8,11}$`)
@@ -48,6 +50,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /v1/payments/chaps/{id}", s.handleCancelPayment)
 	mux.HandleFunc("POST /v1/payments/chaps/{id}/amend", s.handleAmendPayment)
 
+	mux.HandleFunc("GET /v1/payments/chaps/incoming/{bic}", s.handleEvents)
+
 	mux.HandleFunc("GET /v1/system/schedule", s.handleSystemSchedule)
 }
 
@@ -72,6 +76,41 @@ func setCORS(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Idempotency-Key,X-Digital-Signature")
+}
+
+func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	bic := r.PathValue("bic")
+	if bic == "" || !validateBIC(bic) {
+		badRequest(w, "Valid BIC required")
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	ch, unsubscribe := s.Events.Subscribe(bic, 100)
+	defer unsubscribe()
+
+	for {
+		select {
+		case event := <-ch:
+			data, err := json.Marshal(event)
+			if err != nil {
+				continue
+			}
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
 
 func handleOptions(w http.ResponseWriter, r *http.Request) {
@@ -394,6 +433,17 @@ func (s *Server) processXMLPayment(w http.ResponseWriter, r *http.Request) {
 
 	if res.Status == "ACTC" {
 		w.WriteHeader(http.StatusOK)
+		s.Events.Publish(msg.DestBIC, events.Event{
+			Type: "payment.received",
+			Data: map[string]interface{}{
+				"msg_id":     msg.MsgId,
+				"sender":     msg.Sender,
+				"receiver":   msg.DestBIC,
+				"amount":     msg.Amount,
+				"status":     "SETTLED",
+				"scheme":     "CHAPS",
+			},
+		})
 	} else {
 		w.WriteHeader(http.StatusAccepted)
 	}
@@ -448,6 +498,20 @@ func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 	if res.Status == "RJCT" {
 		status = "REJECTED"
 		httpStatus = http.StatusAccepted
+	}
+
+	if res.Status == "ACTC" {
+		s.Events.Publish(req.ReceiverBIC, events.Event{
+			Type: "payment.received",
+			Data: map[string]interface{}{
+				"msg_id":     req.MsgID,
+				"sender":     req.SenderBIC,
+				"receiver":   req.ReceiverBIC,
+				"amount":     req.Amount,
+				"status":     "SETTLED",
+				"scheme":     "CHAPS",
+			},
+		})
 	}
 
 	w.Header().Set("X-Transaction-Status", res.Status)

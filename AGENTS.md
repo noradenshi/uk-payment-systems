@@ -37,7 +37,7 @@ The most important codebase for patterns to copy.
 | Directory | Responsibility |
 |---|---|
 | `cmd/server/` | Single `main.go` — bootstrap only |
-| `pkg/server/` | HTTP router + 17 handlers, JSON/XML encoding |
+| `pkg/server/` | HTTP router + 18 handlers, JSON/XML encoding, SSE streaming |
 | `pkg/ledger/` | Business logic: settlement, participants, positions, limits, liquidity |
 | `pkg/iso20022/` | XML struct models for pacs.008, pacs.002, Business Application Header |
 | `pkg/validator/` | XSD schema registry + envelope validation via libxml2 |
@@ -53,6 +53,7 @@ The most important codebase for patterns to copy.
 type Server struct {
     Validator *validator.ValidatorRegistry
     Ledger    *ledger.LedgerService
+    Events    *events.EventBus
 }
 ```
 Routes registered via `RegisterRoutes(mux *http.ServeMux)` using Go 1.22+ pattern syntax.
@@ -77,10 +78,10 @@ RETURNING id, status
 If status is already `SETTLED`, return cached `ACTC` result.
 
 #### 5. Normalized DB schema (5 tables)
-- `participant_profiles` — static BIC/name/currency
+- `participant_profiles` — static BIC/name/currency/sort_code (UK bank sort code, optional)
 - `participant_liquidity` — high-frequency balance updates
 - `participant_statuses` — ACTIVE/SUSPENDED/DISABLED + block info
-- `transactions` — payment records, UUID v7 primary key
+- `transactions` — payment records, UUID v7 primary key, includes optional sender/receiver sort codes
 - `journal_entries` — immutable audit trail with `pg_notify` trigger
 
 #### 6. ISO 20022 message flow
@@ -127,6 +128,7 @@ A trigger on `journal_entries` fires `pg_notify('liquidity_event', account_bic)`
 ### API style
 - Paths: `/v1/{resource}/{scheme}[/{id}[/action]]`
 - JSON for GUI/admin, XML for ISO 20022 external messages
+- SSE: `GET /v1/payments/{scheme}/incoming/{bic}` for real-time payment events
 - Error responses: `{"error": "message"}`
 - HTTP status codes: 200 (success), 201 (created), 202 (accepted), 400 (bad request), 404 (not found), 409 (conflict), 500 (internal error), 503 (unavailable)
 
@@ -146,6 +148,7 @@ A trigger on `journal_entries` fires `pg_notify('liquidity_event', account_bic)`
 - `encoding/xml` + `encoding/json` for serialization
 - Package name matches directory name
 - Error sentinel values: `var ErrX = errors.New("...")`
+- `pkg/events/events.go` — in-memory EventBus for SSE real-time notifications
 
 ### Frontend conventions
 - React 18 with TypeScript, plain CSS (no CSS framework)
@@ -163,14 +166,34 @@ A trigger on `journal_entries` fires `pg_notify('liquidity_event', account_bic)`
 
 ### Testing
 - Test files exist for ISO 8583 parser, ISO 20022 serialization, and Standard 18 parser:
+  - `chaps-service/pkg/iso20022/serialization_test.go` — 17 tests (includes pacs.008 with sort code XML parsing, without sort codes)
+  - `chaps-service/pkg/ledger/service_test.go` — 12 tests (includes sort code struct fields)
+  - `chaps-service/pkg/server/server_test.go` — 14 tests (includes JSON sort code and register sort code tests)
   - `fps-service/pkg/iso8583/message_test.go` — 7 tests (short msg, MTI validation, optional fields, amount+trace, 0210 encode, round-trip, full field parse)
-  - `fps-service/pkg/iso20022/serialization_test.go` — 12 tests (pacs.008 unmarshal, pacs.002 marshal with ACTC/RJCT/PDNG, envelope wrapping, BAH construction, reason codes, timestamp verification)
+  - `fps-service/pkg/iso20022/serialization_test.go` — 14 tests (includes pacs.008 sort code XML parsing)
+  - `fps-service/pkg/server/server_test.go` — 4 tests (JSON sort code and register sort code tests)
   - `bacs-service/pkg/standard18/parser_test.go` — 13 tests (basic file, AUDDIS, CRLF, validation, pence conversion, multiple records, line padding, zero values)
 - Integration smoke test: `test/integration_test.sh` — starts DBs via `compose-dev.yml`, builds & runs services, runs HTTP smoke tests (participants, cycles, etc.)
 - When adding tests:
   - Go: `_test.go` files alongside source with `package X_test`
   - Frontend: Vitest or React Testing Library
   - SQL: use Docker compose-dev + manual seed verification
+
+### SSE real-time events
+
+All three services support server-sent events for real-time payment notifications.
+
+| Service | Endpoint | Published On | Event Type |
+|---|---|---|---|
+| CHAPS | `GET /v1/payments/chaps/incoming/{bic}` | Each `ACTC` settlement | `payment.received` |
+| FPS | `GET /v1/payments/fps/incoming/{bic}` | Each `ACTC` settlement | `payment.received` |
+| BACS | `GET /v1/payments/bacs/incoming/{bic}` | Cycle `SettleCycle` call | `cycle.settled` |
+
+- Uses in-memory `pkg/events.EventBus` (map of BIC → channel fan-out)
+- `NewEventBus()` → `Publish(bic, event)` / `Subscribe(bic, buf)` / `PublishToAll(bics, event)`
+- SSE payload: `data: {"type":"payment.received","data":{...}}\n\n`
+- Buffered channels (100 events), drops on overflow
+- Client disconnect detected via `r.Context().Done()`
 
 ### Git conventions
 - `.gitignore` ignores `node_modules/`, `dist/`, `.vite/`, `*.log`, `.env`
@@ -192,6 +215,9 @@ A trigger on `journal_entries` fires `pg_notify('liquidity_event', account_bic)`
 9. **ISO 8583 bitmap encoding**: Bits in the primary bitmap are numbered 1-64 (MSB of byte 0 = bit 1). Bits 65-128 use the secondary bitmap, signaled by bit 1 (MSB) of the primary bitmap. The parser reads bitmap as `binary.BigEndian.Uint64` and checks presence via `1 << (64 - bit)` for primary, `1 << (128 - bit)` for secondary.
 10. **Standard 18 amount conversion**: All monetary amounts in BACS Standard 18 files are stored as pence (whole integers). The parser divides by 100.0 to produce GBP float values. This applies to Record 1 (TotalValue), Record 3 (Amount), Record 4 (Amount), Record 9 (TotalValue), and Record A (Amount).
 11. **FPS content-type dispatch**: `ProcessPayment` handles three content types — `application/json` (direct entry), `application/xml` (ISO 20022 pacs.008), and `application/octet-stream` (ISO 8583 binary 0200 message). Each is routed to a dedicated handler. The ISO 8583 handler converts DE4 from pence to pounds (`amount/100.0`) before settlement.
+12. **Sort code support**: BACS (Standard 18 parser), CHAPS (ISO 20022 + JSON API), and FPS (ISO 20022 + JSON API) all support UK bank sort codes. In CHAPS and FPS, sort codes are optional fields on `participant_profiles.sort_code` and `transactions.sender_sort_code`/`receiver_sort_code`. XML pacs.008 messages parse sort codes from `ClrSysMmbId>MmbId` within `FinInstnId`. ISO 8583 does not carry sort codes (empty strings passed). Sort codes are stored as `VARCHAR(9)` — either `XX-XX-XX` or `XXXXXX` format.
+13. **Gridlock retry on settlement**: When a payment fails due to insufficient liquidity (PDNG/INSU), `SettlePayment` and `SettleSIP` automatically call `ResolveGridlock()` and retry once before queueing. This ensures incoming queued payments are settled first, potentially freeing up liquidity. Only PDNG triggers the retry — not RJCT or ACTC.
+14. **SSE EventBus is in-memory**: The `pkg/events.EventBus` uses a `map[BIC][]chan` with no persistence. Events published before a client connects are lost. Reconnecting clients only receive events published after reconnection. This is by design — SSE is for real-time notifications, not durable event sourcing.
 
 ---
 

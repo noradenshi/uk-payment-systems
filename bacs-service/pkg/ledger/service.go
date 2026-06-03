@@ -186,8 +186,9 @@ func (s *LedgerService) ProcessCycle(ctx context.Context) error {
 	return err
 }
 
-func (s *LedgerService) SettleCycle(ctx context.Context) error {
-	return pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+func (s *LedgerService) SettleCycle(ctx context.Context) ([]string, error) {
+	var bics []string
+	err := pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
 		var cycleID int
 		err := tx.QueryRow(ctx, `SELECT id FROM bacs_cycles WHERE status = 'AWAITING_SETTLEMENT' ORDER BY created_at DESC LIMIT 1 FOR UPDATE`).Scan(&cycleID)
 		if err != nil {
@@ -254,6 +255,7 @@ func (s *LedgerService) SettleCycle(ctx context.Context) error {
 			if err := rows.Scan(&bic, &netAmount, &balance, &overdraftLimit); err != nil {
 				return err
 			}
+			bics = append(bics, bic)
 			status := "SETTLED"
 			if balance+netAmount < -overdraftLimit {
 				status = "BLOCKED"
@@ -281,6 +283,7 @@ func (s *LedgerService) SettleCycle(ctx context.Context) error {
 		_, err = tx.Exec(ctx, `UPDATE bacs_cycles SET status = 'SETTLED' WHERE id = $1`, cycleID)
 		return err
 	})
+	return bics, err
 }
 
 func (s *LedgerService) ListCycles(ctx context.Context) ([]map[string]interface{}, error) {

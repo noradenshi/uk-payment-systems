@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"bacs-service/pkg/events"
 	"bacs-service/pkg/ledger"
 	"bacs-service/pkg/server"
 
@@ -37,6 +38,7 @@ func main() {
 
 	srv := &server.Server{
 		Ledger: ledger.NewLedgerService(pool),
+		Events: events.NewEventBus(),
 	}
 
 	mux := http.NewServeMux()

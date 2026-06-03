@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"fps-service/pkg/events"
 	"fps-service/pkg/iso20022"
 	"fps-service/pkg/iso8583"
 	"fps-service/pkg/ledger"
@@ -20,6 +21,7 @@ import (
 
 type Server struct {
 	Ledger *ledger.LedgerService
+	Events *events.EventBus
 }
 
 var reBIC = regexp.MustCompile(`^[A-Z0-9]{8,11}$`)
@@ -64,6 +66,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/liquidity/top-up", s.handleTopUp)
 	mux.HandleFunc("GET /v1/liquidity/prefunded/{bic}", s.handleGetPrefunded)
 
+	mux.HandleFunc("GET /v1/payments/fps/incoming/{bic}", s.handleEvents)
+
 	mux.HandleFunc("GET /v1/system/schedule", s.handleSystemSchedule)
 
 	mux.HandleFunc("POST /v1/payments/fps/iso8583", s.handleISO8583Payment)
@@ -95,6 +99,41 @@ func setCORS(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Idempotency-Key,X-Digital-Signature")
+}
+
+func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	bic := r.PathValue("bic")
+	if bic == "" || !validateBIC(bic) {
+		badRequest(w, "Valid BIC required")
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	ch, unsubscribe := s.Events.Subscribe(bic, 100)
+	defer unsubscribe()
+
+	for {
+		select {
+		case event := <-ch:
+			data, err := json.Marshal(event)
+			if err != nil {
+				continue
+			}
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
 
 func handleOptions(w http.ResponseWriter, r *http.Request) {
@@ -399,6 +438,17 @@ func (s *Server) processXMLPayment(w http.ResponseWriter, r *http.Request) {
 
 	if res.Status == "ACTC" {
 		w.WriteHeader(http.StatusOK)
+		s.Events.Publish(msg.DestBIC, events.Event{
+			Type: "payment.received",
+			Data: map[string]interface{}{
+				"msg_id":     msg.MsgId,
+				"sender":     msg.Sender,
+				"receiver":   msg.DestBIC,
+				"amount":     msg.Amount,
+				"status":     "SETTLED",
+				"scheme":     "FPS",
+			},
+		})
 	} else {
 		w.WriteHeader(http.StatusAccepted)
 	}
@@ -455,6 +505,20 @@ func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 		httpStatus = http.StatusAccepted
 	}
 
+	if res.Status == "ACTC" {
+		s.Events.Publish(req.ReceiverBIC, events.Event{
+			Type: "payment.received",
+			Data: map[string]interface{}{
+				"msg_id":     req.MsgID,
+				"sender":     req.SenderBIC,
+				"receiver":   req.ReceiverBIC,
+				"amount":     req.Amount,
+				"status":     "SETTLED",
+				"scheme":     "FPS",
+			},
+		})
+	}
+
 	w.Header().Set("X-Transaction-Status", res.Status)
 	writeJSON(w, httpStatus, map[string]string{
 		"msg_id":      req.MsgID,
@@ -486,11 +550,25 @@ func (s *Server) processISO8583Payment(w http.ResponseWriter, r *http.Request) {
 	amount := float64(msg.DE4_Amount) / 100.0
 	msgID := fmt.Sprintf("ISO8583-%s-%06d", time.Now().Format("20060102"), msg.DE11_Trace)
 
-	res, err := s.Ledger.SettleSIP(r.Context(), msgID, msg.DE32_Acquirer, msg.DE100_Receiver, amount, msgID)
+	res, err := s.Ledger.SettleSIP(r.Context(), msgID, msg.DE32_Acquirer, msg.DE100_Receiver, amount, msgID, "", "")
 	if err != nil {
 		log.Printf("[CRITICAL] ISO8583 ledger failure for trace %d: %v", msg.DE11_Trace, err)
 		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
 		return
+	}
+
+	if res.Status == "ACTC" {
+		s.Events.Publish(msg.DE100_Receiver, events.Event{
+			Type: "payment.received",
+			Data: map[string]interface{}{
+				"msg_id":     msgID,
+				"sender":     msg.DE32_Acquirer,
+				"receiver":   msg.DE100_Receiver,
+				"amount":     amount,
+				"status":     "SETTLED",
+				"scheme":     "FPS",
+			},
+		})
 	}
 
 	respCode := "00"
