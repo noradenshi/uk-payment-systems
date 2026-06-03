@@ -1,38 +1,50 @@
 # Deployment guide — UKPS
 
-UKPS wspiera dwie topologie uruchomienia:
+UKPS nie rozdziela osobnych plików dla dev i produkcji — topologia jest jedna (`compose.yml`).
+Tryb pracy (demo / production) wybiera się przez pole `mode` w `config/sessions.json` każdego serwisu.
 
-| Tryb | Kiedy używać | Komenda |
-|---|---|---|
-| **Development** | Praca lokalna, tylko bazy danych | `docker compose -f compose-dev.yml up -d` |
-| **Produkcja** | Wszystkie serwisy w kontenerach | `docker compose up -d` |
+| Tryb | Zachowanie |
+|---|---|
+| `demo` | Przyśpieszony tick (co `demo_session_minutes` s), skrócone czasy cykli |
+| `production` | Tick co 60s, rzeczywiste czasy (np. 1440 min dla BACS, wall-clock settlement_times dla FPS) |
 
 ---
 
-## Topologia
+## Topologia (produkcja)
 
 ```
-┌────────────────────────────────────────────────────────────────────┐
-│                        docker-compose                              │
-│                                                                    │
-│  ┌────────────┐   ┌────────────┐   ┌────────────┐                │
-│  │ chaps-db   │   │ fps-db     │   │ bacs-db    │                │
-│  │ postgres   │   │ postgres   │   │ postgres   │                │
-│  │ :5432      │   │ :5433      │   │ :5434      │                │
-│  └─────┬──────┘   └─────┬──────┘   └─────┬──────┘                │
-│        │                │                │                        │
-│  ┌─────▼──────┐   ┌─────▼──────┐   ┌─────▼──────┐                │
-│  │ chaps-app  │   │ fps-app    │   │ bacs-app   │                │
-│  │ :8080      │   │ :8081      │   │ :8082      │                │
-│  │ Go + React │   │ Go + React │   │ Go         │                │
-│  └────────────┘   └────────────┘   └────────────┘                │
-│                                                                    │
-│  ┌────────────────────────────────────────────────────────────┐   │
-│  │                    central-bank-service                     │   │
-│  │                    :8083 (panel operatorski)                │   │
-│  └────────────────────────────────────────────────────────────┘   │
-└────────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│                      docker compose                           │
+│                                                               │
+│  ┌────────────┐   ┌────────────┐   ┌────────────┐           │
+│  │ chaps-db   │   │ fps-db     │   │ bacs-db    │           │
+│  │ postgres   │   │ postgres   │   │ postgres   │           │
+│  │ :5420      │   │ :5421      │   │ :5422      │           │
+│  └─────┬──────┘   └─────┬──────┘   └─────┬──────┘           │
+│        │                │                │                   │
+│  ┌─────▼──────┐   ┌─────▼──────┐   ┌─────▼──────┐           │
+│  │ chaps-app  │   │ fps-app    │   │ bacs-app   │           │
+│  │ :8420      │   │ :8421      │   │ :8422      │           │
+│  └────────────┘   └─────┬──────┘   └────────────┘           │
+│                         │                                    │
+│                  ┌──────▼──────┐                             │
+│                  │ fps ISO 8583 │                             │
+│                  │ :7421       │                             │
+│                  └─────────────┘                             │
+└───────────────────────────────────────────────────────────────┘
 ```
+
+### Porty
+
+| Serwis | Port kontenera | Port hosta |
+|---|---|---|
+| CHAPS APP | 8080 | 8420 |
+| FPS APP | 8081 | 8421 |
+| FPS ISO 8583 | 7421 | 7421 |
+| BACS APP | 8082 | 8422 |
+| CHAPS DB | 5432 | 5420 |
+| FPS DB | 5432 | 5421 |
+| BACS DB | 5432 | 5422 |
 
 ---
 
@@ -50,9 +62,6 @@ cd chaps-service && go run ./cmd/server/main.go
 # 3. Dla FPS lub BACS — analogicznie
 cd fps-service && go run ./cmd/server/main.go
 cd bacs-service && go run ./cmd/server/main.go
-
-# 4. (Opcjonalnie) Panel Central Bank
-cd central-bank-service && go run ./cmd/server/main.go
 ```
 
 ### Zmienne środowiskowe
@@ -79,16 +88,16 @@ docker compose logs -f
 docker compose down
 ```
 
-### Porty
+---
 
-| Serwis | Port kontenera | Port hosta |
-|---|---|---|
-| CHAPS APP | 8080 | 8080 |
-| FPS APP | 8081 | 8081 |
-| BACS APP | 8082 | 8082 |
-| CHAPS DB | 5432 | 5432 |
-| FPS DB | 5433 | 5433 |
-| BACS DB | 5434 | 5434 |
+## Tryb demo
+
+W `config/sessions.json` ustaw `"mode": "demo"` i `"demo_session_minutes": 15` (lub mniej).
+
+W trybie demo:
+- Tick schedulera = `min(demo_session_minutes, 60)` s
+- Czasy cykli BACS capped do `demo_session_minutes`
+- Cykle DNS FPS zamykane co `demo_session_minutes`
 
 ---
 
@@ -96,7 +105,7 @@ docker compose down
 
 | Komponent | Wersja |
 |---|---|
-| Go | 1.25+ |
+| Go | 1.26 (obraz `golang:1.26-alpine`) |
 | Docker | 24+ |
 | Docker Compose | v2 |
 | PostgreSQL | 18 (z `uuidv7()`) |
@@ -111,15 +120,26 @@ docker compose down
 
 ---
 
-## Testowanie integracyjne
+## Testowanie
+
+Testy jednostkowe znajdują się w podfolderach każdego serwisu, obok testowanego kodu:
+
+| Serwis | Pliki testowe |
+|---|---|
+| CHAPS | `chaps-service/pkg/iso20022/serialization_test.go` |
+|       | `chaps-service/pkg/ledger/service_test.go` |
+|       | `chaps-service/pkg/server/server_test.go` |
+| FPS | `fps-service/pkg/iso20022/serialization_test.go` |
+|     | `fps-service/pkg/iso8583/message_test.go` |
+|     | `fps-service/pkg/server/server_test.go` |
+|     | `fps-service/pkg/validator/validator_test.go` |
+| BACS | `bacs-service/pkg/standard18/parser_test.go` |
+|      | `bacs-service/pkg/server/server_test.go` |
+
+Uruchomienie wszystkich testów w serwisie:
 
 ```bash
-# Smoke test — uruchamia bazy, buduje serwisy, testuje HTTP
-./test/integration_test.sh
+cd {service} && go test ./...
 ```
 
-Test sprawdza:
-- Rejestrację uczestników
-- Cykl życia płatności (każdy serwis)
-- Gridlock resolution
-- SSE events
+Integracyjny smoke test (`test/integration_test.sh`) uruchamia bazy przez `compose-dev.yml`, buduje serwisy i testuje HTTP + SSE.
