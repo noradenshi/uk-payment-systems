@@ -37,7 +37,7 @@ The most important codebase for patterns to copy.
 | Directory | Responsibility |
 |---|---|
 | `cmd/server/` | Single `main.go` — bootstrap only |
-| `pkg/server/` | HTTP router + 18 handlers, JSON/XML encoding, SSE streaming |
+| `pkg/server/` | HTTP router + 18 handlers, JSON/XML encoding, SSE streaming, background scheduler |
 | `pkg/ledger/` | Business logic: settlement, participants, positions, limits, liquidity |
 | `pkg/iso20022/` | XML struct models for pacs.008, pacs.002, Business Application Header |
 | `pkg/validator/` | XSD schema registry + envelope validation via libxml2 |
