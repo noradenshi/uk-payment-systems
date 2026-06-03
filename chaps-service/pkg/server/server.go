@@ -709,13 +709,9 @@ func (s *Server) handleAmendPayment(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSystemSchedule(w http.ResponseWriter, r *http.Request) {
 	cfg := loadGlobalSchedule("chaps")
 	opening, _ := cfg["opening_time"].(string)
-	customerCutoff, _ := cfg["customer_cutoff"].(string)
 	interbankCutoff, _ := cfg["interbank_cutoff"].(string)
 	if opening == "" {
 		opening = "06:00"
-	}
-	if customerCutoff == "" {
-		customerCutoff = "17:40"
 	}
 	if interbankCutoff == "" {
 		interbankCutoff = "18:00"
@@ -723,7 +719,6 @@ func (s *Server) handleSystemSchedule(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
 		"date":              time.Now().Format("2006-01-02"),
 		"opening_time":      opening,
-		"customer_cutoff":   customerCutoff,
 		"interbank_cutoff":  interbankCutoff,
 		"timezone":          "Europe/London",
 		"demo_session_minutes": fmt.Sprint(cfg["demo_session_minutes"]),
