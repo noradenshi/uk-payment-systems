@@ -43,7 +43,7 @@ func main() {
 
 	isoPort := os.Getenv("ISO8583_PORT")
 	if isoPort == "" {
-		isoPort = ":8583"
+		isoPort = ":7421"
 	}
 
 	isoCtx, isoCancel := context.WithCancel(context.Background())

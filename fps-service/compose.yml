@@ -23,8 +23,10 @@ services:
     platform: linux/amd64
     ports:
       - "8081:8081"
+      - "7421:7421"
     environment:
       DATABASE_URL: "postgres://fps_admin:password123@db:5432/fps_ledger"
+      ISO8583_PORT: ":7421"
     depends_on:
       db:
         condition: service_healthy

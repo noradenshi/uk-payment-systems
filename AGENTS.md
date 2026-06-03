@@ -20,7 +20,7 @@ Three services mimic the UK interbank payment network. All three services have f
 | Service | Port | DB Port | DB Name | Other |
 | :--- | :--- | :--- | :--- | :--- |
 | CHAPS | 8080 | 5432 | `chaps_ledger` | — |
-| FPS | 8081 | 5433 | `fps_ledger` | TCP `:8583` (ISO 8583 socket) |
+| FPS | 8081 | 5433 | `fps_ledger` | TCP `:7421` (ISO 8583 socket) |
 | BACS | 8082 | 5434 | `bacs_ledger` | — |
 
 ---
@@ -218,7 +218,7 @@ All three services support server-sent events for real-time payment notification
 12. **Sort code support**: BACS (Standard 18 parser), CHAPS (ISO 20022 + JSON API), and FPS (ISO 20022 + JSON API) all support UK bank sort codes. In CHAPS and FPS, sort codes are optional fields on `participant_profiles.sort_code` and `transactions.sender_sort_code`/`receiver_sort_code`. XML pacs.008 messages parse sort codes from `ClrSysMmbId>MmbId` within `FinInstnId`. ISO 8583 does not carry sort codes (empty strings passed). Sort codes are stored as `VARCHAR(9)` — either `XX-XX-XX` or `XXXXXX` format.
 13. **Gridlock retry on settlement**: When a payment fails due to insufficient liquidity (PDNG/INSU), `SettlePayment` and `SettleSIP` automatically call `ResolveGridlock()` and retry once before queueing. This ensures incoming queued payments are settled first, potentially freeing up liquidity. Only PDNG triggers the retry — not RJCT or ACTC.
 14. **SSE EventBus is in-memory**: The `pkg/events.EventBus` uses a `map[BIC][]chan` with no persistence. Events published before a client connects are lost. Reconnecting clients only receive events published after reconnection. This is by design — SSE is for real-time notifications, not durable event sourcing.
-15. **FPS ISO 8583 TCP socket**: FPS listens on `:8583` (configurable via `ISO8583_PORT` env var) for raw TCP connections. Uses 2-byte big-endian length prefix framing, max 4096 bytes per message, goroutine-per-connection. The TCP handler uses the same `Ledger.SettleSIP` and `Events.Publish` calls as the HTTP handler.
+15. **FPS ISO 8583 TCP socket**: FPS listens on `:7421` (configurable via `ISO8583_PORT` env var) for raw TCP connections. Uses 2-byte big-endian length prefix framing, max 4096 bytes per message, goroutine-per-connection. The TCP handler uses the same `Ledger.SettleSIP` and `Events.Publish` calls as the HTTP handler.
 
 ---
 

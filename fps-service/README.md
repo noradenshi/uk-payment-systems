@@ -215,15 +215,15 @@ In addition to the HTTP endpoint, the FPS service listens on a **raw TCP socket*
 
 | Setting | Value |
 | :--- | :--- |
-| Default port | `8583` |
-| Config via | `ISO8583_PORT` env var (e.g. `:8583`) |
+| Default port | `7421` |
+| Config via | `ISO8583_PORT` env var (e.g. `:7421`) |
 | Framing | 2-byte big-endian length prefix, then the ISO 8583 binary message |
 | Response | 2-byte big-endian length prefix, then 0210 binary response |
 | Max message | 4096 bytes |
 
 **Protocol flow:**
 ```
-Client                            Server (:8583)
+Client                            Server (:7421)
   │                                  │
   ├── [2 bytes: uint16 length N] ───>│
   ├── [N bytes: 0200 + bitmap + DEs]─>
