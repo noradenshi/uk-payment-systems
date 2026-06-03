@@ -197,18 +197,80 @@ All three services support server-sent events for real-time payment notification
 
 ### Automated background processing (scheduler)
 
-All three services run a background scheduler that performs periodic work without manual API calls. Driven by `config/sessions.json`.
+All three services run a background scheduler driven by `config/sessions.json`. The scheduler uses a **polling tick** — a `time.Ticker` fires every N seconds, wakes up, queries the DB for work, executes it, then sleeps until the next tick.
 
-| Service | Scheduler File | Interval (demo) | Tasks |
+#### How the tick works (scheduler loop)
+
+```
+StartScheduler:
+  1. Load config from sessions.json
+  2. Compute interval = min(demo_session_minutes, 60) seconds (demo) or 60s (production)
+  3. Create time.Ticker(interval)
+  4. Loop:
+     - Wait for tick or context cancellation
+     - On tick: query DB for work, execute, log results
+     - On cancel: stop ticker, return
+```
+
+The tick interval is a trade-off: shorter = more responsive but more DB queries; longer = less load but delayed reactions. 60s is the default; `demo_session_minutes` speeds it up for demos.
+
+#### Config-driven behavior (`config/sessions.json`)
+
+```
+config/sessions.json
+├── mode               "demo" or "production" — explicit switch
+├── demo_session_minutes  Accelerated time window (e.g. 15 min = 15s tick)
+├── FPS-specific
+│   ├── settlement_times    Wall-clock settlement windows (e.g. 09:00, 15:00)
+│   └── opening/closing_time  Display only (not enforced)
+├── BACS-specific
+│   ├── processing_duration_minutes  How long until OPEN→PROCESSING (capped to demo_session_minutes in demo)
+│   ├── settlement_duration_minutes  Additional time until PROCESSING→SETTLED (capped to demo_session_minutes in demo)
+│   └── input_cutoff                 Display only
+└── CHAPS-specific
+    └── opening_time/customer_cutoff/interbank_cutoff  Display only
+```
+
+| Service | Tick Interval | What it does each tick | Duration source |
 |---|---|---|---|
-| FPS | `pkg/server/scheduler.go` | `demo_session_minutes` s (default 60s) | Execute forward-dated payments, execute standing orders, close expired DNS cycles |
-| BACS | `pkg/server/scheduler.go` | `demo_session_minutes` s (default 60s) | Advance cycles: OPEN→PROCESSING→AWAITING_SETTLEMENT→SETTLED when dates elapse |
-| CHAPS | `pkg/server/scheduler.go` | `demo_session_minutes` s (default 60s) | Enforce real-time liquidity blocks (suspend participants with 2h+ breaches) |
+| FPS | `min(demo, 60)s` | Execute forward-dated, standing orders; close expired DNS cycles and reopen new ones | `settlement_times` (production) or `demo_session_minutes` (demo) |
+| BACS | `min(demo, 60)s` | Advance OPEN→PROCESSING→AWAITING_SETTLEMENT→SETTLED based on `created_at + config duration` | `processing_duration_minutes` / `settlement_duration_minutes` (capped to demo in demo) |
+| CHAPS | `min(demo, 60)s` | Call `EnforceRealtimeLiquidityBlocks` to suspend 2h+ breaches | N/A |
 
-- Config is loaded via `loadGlobalSchedule()` from `sessions.json`, `UKPS_CONFIG_PATH` env var, or relative paths
-- Tick interval = `min(demo_session_minutes, 60)` seconds when `demo_session_minutes > 0`, otherwise 60s
-- Scheduler starts in `main.go` via `srv.StartScheduler(schedCtx)` and stops cleanly on SIGINT/SIGTERM via context cancellation
-- All scheduler tasks log on failure but never crash the service (errors are non-fatal)
+For BACS specifically: `AdvanceCycles` compares cycle `created_at + duration` against `NOW()`, not static `DATE` columns — so sub-day durations work in demo mode. The new cycle created by `CloseInputDay` sets its dates using config durations.
+
+#### Mode switching
+
+Set `"mode": "demo"` or `"mode": "production"` per service in `sessions.json`:
+
+```json
+"fps": {
+    "mode": "production",
+    "demo_session_minutes": 0,
+    "settlement_times": ["03:00", "09:00", "15:00"],
+    ...
+}
+```
+
+- **demo**: tick interval = `min(demo_session_minutes, 60)s`, cycle durations capped to `demo_session_minutes`, DNS cycles close every `demo_session_minutes`
+- **production**: tick interval = 60s, uses real config durations (1440 min for BACS cycles), uses wall-clock `settlement_times` for FPS DNS
+
+#### Config field status
+
+| Field | Service | Status |
+|---|---|---|
+| `mode` | all | ✅ Drives tick interval & duration scaling |
+| `demo_session_minutes` | all | ✅ Tick interval & DNS cycle window |
+| `settlement_times` | FPS | ✅ Next-cycle scheduling via `nextSettlementTime()` |
+| `processing_duration_minutes` | BACS | ✅ Drives `AdvanceCycles` + `CloseInputDay` |
+| `settlement_duration_minutes` | BACS | ✅ Drives `AdvanceCycles` + `CloseInputDay` |
+| `opening_time` | FPS, CHAPS | ⚠️ Display only in `/v1/system/schedule` |
+| `closing_time` | FPS | ⚠️ Display only |
+| `customer_cutoff` | CHAPS | ⚠️ Display only |
+| `interbank_cutoff` | CHAPS | ⚠️ Display only |
+| `input_cutoff` | BACS | ⚠️ Display only |
+
+Scheduler starts in `main.go` via `srv.StartScheduler(schedCtx)` and stops cleanly on SIGINT/SIGTERM via context cancellation. All tasks log on failure but never crash the service.
 
 ### Git conventions
 - `.gitignore` ignores `node_modules/`, `dist/`, `.vite/`, `*.log`, `.env`
