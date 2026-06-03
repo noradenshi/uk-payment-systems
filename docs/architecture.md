@@ -14,18 +14,15 @@ UKPS (UK Payment Systems) to symulacja brytyjskiej infrastruktury rozliczeń mi�
 │    Port 8082         │    │   Port 8081           │    │   Port 8080          │
 └────────┬─────────────┘    └────────┬──────────────┘    └────────┬──────────────┘
          │                           │                           │
-         │       ┌───────────────────┼───────────────────┐       │
-         │       │                   │                   │       │
-         └───────┼───────────────────┼───────────────────┼───────┘
-                 │                   │                   │
-         ┌───────▼───────────────────▼───────────────────▼───────┐
-         │                  PostgreSQL 18                        │
-         │  bacs_ledger (5434)  fps_ledger (5433)  chaps_ledger  │
-         │                  (5432)                               │
-         └───────────────────────────────────────────────────────┘
+         ▼                           ▼                           ▼
+┌──────────────┐          ┌──────────────┐          ┌──────────────┐
+│ Postgres 18  │          │ Postgres 18  │          │ Postgres 18  │
+│ bacs_ledger  │          │ fps_ledger   │          │ chaps_ledger │
+│ :5434        │          │ :5433        │          │ :5432        │
+└──────────────┘          └──────────────┘          └──────────────┘
 ```
 
-Każdy serwis to niezależny binarny Go z własną bazą PostgreSQL. Współdzielą koncepcyjnie rejestr uczestników, ale każdy prowadzi własne tabele transakcyjne.
+Każdy serwis to w pełni niezależny binarny Go z własną bazą PostgreSQL — osobne bazy, osobne tabele, brak współdzielenia infrastruktury. Wszystkie serwisy stosują ten sam wzorzec schematu (normalizacja uczestników na 3 tabele), ale każda baza zawiera własne kopie danych.
 
 ---
 
@@ -51,7 +48,7 @@ Każdy serwis dzieli uczestników na 3 tabele (różne częstotliwości aktualiz
 | `participant_liquidity` | Wysokoczęstotliwościowe salda |
 | `participant_statuses` | Status operacyjny, blokady, overdraft |
 
-Oraz 2 tabele wspólne dla transakcji:
+Oraz 2 tabele transakcyjne (osobne per baza):
 
 | Tabela | Cel |
 |---|---|

@@ -59,15 +59,15 @@ System obsługuje wyłącznie strefę **UK (GBP)**. Wszystkie serwisy są w peł
 │    Port 8082         │    │   Port 8081           │    │   Port 8080          │
 └────────┬─────────────┘    └────────┬──────────────┘    └────────┬──────────────┘
          │                           │                           │
-         └───────────────────────────┼───────────────────────────┘
-                                     │
-                     ┌───────────────▼────────────────┐
-                     │        PostgreSQL 18            │
-                     │  (3 osobne bazy danych)         │
-                     └────────────────────────────────┘
+         ▼                           ▼                           ▼
+┌──────────────┐          ┌──────────────┐          ┌──────────────┐
+│ Postgres 18  │          │ Postgres 18  │          │ Postgres 18  │
+│ bacs_ledger  │          │ fps_ledger   │          │ chaps_ledger │
+│ :5434        │          │ :5433        │          │ :5432        │
+└──────────────┘          └──────────────┘          └──────────────┘
 ```
 
-Każdy serwis jest w pełni niezależny — osobny binary, osobna baza, osobny kontener. Współdzielą koncepcyjnie rejestr uczestników, ale nie współdzielą infrastruktury.
+Każdy serwis jest w pełni niezależny — osobny binary, osobna baza, osobny kontener. Wszystkie stosują ten sam wzorzec schematu (normalizacja uczestników na 3 tabele), ale każdy prowadzi własne kopie danych we własnej bazie — brak współdzielenia infrastruktury.
 
 ---
 

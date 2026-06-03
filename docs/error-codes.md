@@ -30,13 +30,12 @@ Wszystkie serwisy UKPS zwracają błędy w ujednoliconym formacie JSON:
 
 | Kod HTTP | Sytuacja |
 |---|---|
-| 200 | Płatność rozliczona (ACTC) |
-| 202 (ACTC) | Płatność rozliczona ale zwrócona przez idempotencję |
+| 200 | Płatność rozliczona (ACTC), w tym idempotentna |
 | 202 (PDNG) | Brak płynności — zakolejkowane |
 | 202 (RJCT) | Odrzucone: nieznany BIC, konto zablokowane, nieprawidłowy XML |
 | 400 | Brak msg_id, nieprawidłowy BIC, kwota ≤ 0 |
 | 404 | Transakcja nie istnieje |
-| 409 | Próba anulowania SETTLED/QUEUED |
+| 409 | Próba anulowania SETTLED |
 | 415 | Należy użyć `application/json` lub `application/xml` |
 | 503 | Poza godzinami operacyjnymi (06:00-18:00) |
 

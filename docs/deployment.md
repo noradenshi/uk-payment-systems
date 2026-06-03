@@ -83,7 +83,7 @@ docker compose down
 
 | Serwis | Port kontenera | Port hosta |
 |---|---|---|
-| CHAPP APP | 8080 | 8080 |
+| CHAPS APP | 8080 | 8080 |
 | FPS APP | 8081 | 8081 |
 | BACS APP | 8082 | 8082 |
 | CHAPS DB | 5432 | 5432 |

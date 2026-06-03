@@ -74,7 +74,7 @@ Wszystkie błędy JSON mają format:
 | **GET** | `/payments/chaps/{id}` | Status płatności, szczegóły ISO 20022, audyt |
 | **GET** | `/payments/chaps` | Lista/filtrowanie płatności po statusie i limicie |
 | **POST** | `/payments/chaps/{id}/authorize` | Autoryzacja 2FA dla płatności wysokowartościowych (stub) |
-| **DELETE** | `/payments/chaps/{id}` | Anulowanie płatności — tylko gdy status `PENDING` |
+| **DELETE** | `/payments/chaps/{id}` | Anulowanie płatności — tylko gdy status `PENDING` lub `QUEUED` |
 | **POST** | `/payments/chaps/{id}/amend` | Zmiana szczegółów płatności oczekującej |
 | **POST** | `/payments/chaps/gridlock/resolve` | Ręczne wywołanie rozwiązywania gridlocka |
 | **GET** | `/payments/chaps/limits` | Limity rozliczeniowe i pozostała płynność dzienna |
