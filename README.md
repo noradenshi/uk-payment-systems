@@ -1,26 +1,26 @@
 # UK Payment Systems (UKPS)
 
-A multi-service simulation of the UK interbank payment network — **CHAPS** (RTGS, high-value), **FPS** (near-real-time, low-value), and **BACS** (batch, 3-day settlement) — plus a **Central Bank** supervisory dashboard.
+Wielousługowa symulacja brytyjskiej sieci płatności międzybankowych — **CHAPS** (RTGS, wysokokwotowe), **FPS** (blisko-czasu-rzeczywistego, niskokwotowe) i **BACS** (batchowe, 3-dniowe rozliczenie) — oraz panel nadzorczy **Banku Centralnego**.
 
-Each service is an independent Go binary with its own PostgreSQL ledger, deployable together via Docker Compose.
+Każda usługa to niezależny binarny plik Go z własnym rejestrem PostgreSQL, możliwy do wdrożenia razem przez Docker Compose.
 
-## Services
+## Usługi
 
-| Service | Scheme | Settlement | App Port | DB Port | DB Name |
+| Usługa | Schemat | Rozliczenie | Port aplikacji | Port DB | Nazwa DB |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | [CHAPS](./chaps-service/) | ISO 20022 | RTGS | `8420` | `5420` | `chaps_ledger` |
 | [FPS](./fps-service/) | ISO 20022 + ISO 8583 | DNS | `8421` | `5421` | `fps_ledger` |
-| [BACS](./bacs-service/) | Standard 18 | 3-day net | `8422` | `5422` | `bacs_ledger` |
+| [BACS](./bacs-service/) | Standard 18 | netting 3-dniowy | `8422` | `5422` | `bacs_ledger` |
 
-## Quick Start
+## Szybki start
 
 ```bash
 docker compose up -d
 ```
 
-This starts all four services and their databases. Service READMEs contain detailed API documentation, message formats, and settlement logic.
+Powyższe polecenie uruchamia wszystkie cztery usługi i ich bazy danych. Pliki README poszczególnych usług zawierają szczegółową dokumentację API, formaty komunikatów i logikę rozliczeń.
 
-## Architecture
+## Architektura
 
 ```
 bacs-service ─── Postgres 18 (bacs_ledger)
@@ -28,4 +28,8 @@ fps-service  ─── Postgres 18 (fps_ledger)
 chaps-service ── Postgres 18 (chaps_ledger)
 ```
 
-Each service is fully independent — separate binary, separate database, separate container. They share a common participant registry pattern conceptually but do not share infrastructure. See `AGENTS.md` for implementation conventions.
+Każda usługa jest całkowicie niezależna — osobny binarny plik, osobna baza danych, osobny kontener. Koncepcyjnie współdzielą wzorzec wspólnego rejestru uczestników, ale nie współdzielą infrastruktury. Patrz `AGENTS.md` po konwencje implementacyjne.
+
+## Integracje
+
+- [KLIK → CHAPS](./docs/integrations/klik.md) — endpoint adaptera dla systemu KLIK
