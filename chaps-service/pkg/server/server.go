@@ -52,6 +52,9 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /v1/payments/chaps/incoming/{bic}", s.handleEvents)
 
+	mux.HandleFunc("POST /v1/klik/chaps/settle", s.handleKlikSettle)
+	mux.HandleFunc("GET /v1/klik/chaps/healthz", s.handleKlikHealth)
+
 	mux.HandleFunc("GET /v1/system/schedule", s.handleSystemSchedule)
 }
 
@@ -458,7 +461,7 @@ func (s *Server) processXMLPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := s.Ledger.SettlePayment(r.Context(), msg.MsgId, msg.Sender, msg.DestBIC, msg.Amount, msg.EndToEndId, msg.SenderSortCode, msg.DestSortCode)
+	res, err := s.Ledger.SettlePayment(r.Context(), msg.MsgId, msg.Sender, msg.DestBIC, msg.Amount, msg.EndToEndId, msg.SenderSortCode, msg.DestSortCode, "")
 	if err != nil {
 		log.Printf("[CRITICAL] Ledger system failure for MsgId %s: %v", msg.MsgId, err)
 		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
@@ -526,7 +529,7 @@ func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := s.Ledger.SettlePayment(r.Context(), req.MsgID, req.SenderBIC, req.ReceiverBIC, req.Amount, req.EndToEndID, req.SenderSortCode, req.ReceiverSortCode)
+	res, err := s.Ledger.SettlePayment(r.Context(), req.MsgID, req.SenderBIC, req.ReceiverBIC, req.Amount, req.EndToEndID, req.SenderSortCode, req.ReceiverSortCode, "")
 	if err != nil {
 		log.Printf("[CRITICAL] Ledger system failure for MsgId %s: %v", req.MsgID, err)
 		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)

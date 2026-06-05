@@ -28,6 +28,9 @@ services:
     depends_on:
       chaps-db:
         condition: service_healthy
+    networks:
+      - default
+      - chaps_klik
 
   fps-db:
     image: postgres:18-alpine
@@ -105,6 +108,10 @@ services:
   #     - chaps-app
   #     - fps-app
   #     - bacs-app
+
+networks:
+  chaps_klik:
+    name: chaps_klik
 
 volumes:
   chaps_data:

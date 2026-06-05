@@ -2,7 +2,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 CREATE TABLE participant_profiles (
     bic_code VARCHAR(11) PRIMARY KEY,
-    name TEXT NOT NULL,
+    name TEXT NOT NULL UNIQUE,
     sort_code VARCHAR(9),
     currency VARCHAR(3) DEFAULT 'GBP',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -39,6 +39,7 @@ CREATE TABLE transactions (
     receiver_sort_code VARCHAR(9),
     amount DECIMAL(20, 2) NOT NULL,
     status payment_status DEFAULT 'PENDING',
+    klik_session_id VARCHAR(36),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 

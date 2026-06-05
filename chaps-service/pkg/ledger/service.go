@@ -328,6 +328,16 @@ func (s *LedgerService) GetPaymentDetails(ctx context.Context, msgID string) (ma
 	return details, nil
 }
 
+func (s *LedgerService) LookupBankByName(ctx context.Context, name string) (string, error) {
+	var bic string
+	err := s.Pool.QueryRow(ctx,
+		"SELECT bic_code FROM participant_profiles WHERE name = $1", name).Scan(&bic)
+	if err != nil {
+		return "", ErrAccountNotFound
+	}
+	return bic, nil
+}
+
 func (s *LedgerService) RegisterParticipant(ctx context.Context, bic, name, sortCode string, initialBalance float64) error {
 	if sortCode == "" {
 		sortCode = ""
@@ -397,19 +407,19 @@ func (s *LedgerService) checkDailyLimit(ctx context.Context, tx pgx.Tx, sender s
 	return nil
 }
 
-func (s *LedgerService) SettlePayment(ctx context.Context, msgID string, sender string, receiver string, amount float64, endToEndID string, senderSortCode, receiverSortCode string) (SettlementResult, error) {
-	result, err := s.settlePaymentOnce(ctx, msgID, sender, receiver, amount, endToEndID, senderSortCode, receiverSortCode)
+func (s *LedgerService) SettlePayment(ctx context.Context, msgID string, sender string, receiver string, amount float64, endToEndID string, senderSortCode, receiverSortCode string, klikSessionID string) (SettlementResult, error) {
+	result, err := s.settlePaymentOnce(ctx, msgID, sender, receiver, amount, endToEndID, senderSortCode, receiverSortCode, klikSessionID)
 	if err != nil {
 		return result, err
 	}
 	if result.Status == "PDNG" {
 		s.ResolveGridlock(ctx)
-		result, err = s.settlePaymentOnce(ctx, msgID, sender, receiver, amount, endToEndID, senderSortCode, receiverSortCode)
+		result, err = s.settlePaymentOnce(ctx, msgID, sender, receiver, amount, endToEndID, senderSortCode, receiverSortCode, klikSessionID)
 	}
 	return result, err
 }
 
-func (s *LedgerService) settlePaymentOnce(ctx context.Context, msgID string, sender string, receiver string, amount float64, endToEndID string, senderSortCode, receiverSortCode string) (SettlementResult, error) {
+func (s *LedgerService) settlePaymentOnce(ctx context.Context, msgID string, sender string, receiver string, amount float64, endToEndID string, senderSortCode, receiverSortCode string, klikSessionID string) (SettlementResult, error) {
 	var result SettlementResult
 
 	if amount > singlePaymentLimit {
@@ -436,11 +446,11 @@ func (s *LedgerService) settlePaymentOnce(ctx context.Context, msgID string, sen
 		var existingAmount float64
 
 		err := tx.QueryRow(ctx, `
-			INSERT INTO transactions (msg_id, sender_bic, receiver_bic, sender_sort_code, receiver_sort_code, amount, status, end_to_end_id)
-			VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6, 'PENDING', $7)
+			INSERT INTO transactions (msg_id, sender_bic, receiver_bic, sender_sort_code, receiver_sort_code, amount, status, end_to_end_id, klik_session_id)
+			VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6, 'PENDING', $7, NULLIF($8, ''))
 			ON CONFLICT (msg_id) DO UPDATE SET msg_id = EXCLUDED.msg_id
 			RETURNING id, status, sender_bic, receiver_bic, amount`,
-			msgID, sender, receiver, senderSortCode, receiverSortCode, amount, endToEndID).Scan(&internalUUID, &currentStatus, &existingSender, &existingReceiver, &existingAmount)
+			msgID, sender, receiver, senderSortCode, receiverSortCode, amount, endToEndID, klikSessionID).Scan(&internalUUID, &currentStatus, &existingSender, &existingReceiver, &existingAmount)
 
 		if err != nil {
 			return fmt.Errorf("failed to initialize transaction: %w", err)
