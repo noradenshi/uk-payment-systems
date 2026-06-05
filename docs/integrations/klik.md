@@ -12,7 +12,7 @@ KLIK                              chaps-service (UKPS)
  │  POST /v1/klik/chaps/settle           │
  │  {session_id, transfer_id,            │
  │   from, to, amount, currency}         │
- │ ─────────────────────────────────►    │
+ │ ────────────────────────────────────► │
  │                                       │
  │  • walidacja: GBP, poprawna kwota     │
  │  • lookup banku po nazwie w DB        │
@@ -21,7 +21,7 @@ KLIK                              chaps-service (UKPS)
  │                                       │
  │  {transfer_id, status,                │
  │   rtgs_reference, failure_reason}     │
- │ ◄─────────────────────────────────    │
+ │ ◄──────────────────────────────────── │
 ```
 
 Banki są identyfikowane po **nazwie** (`participant_profiles.name`), która jest
