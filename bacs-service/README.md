@@ -235,7 +235,6 @@ bacs-service/
 │   └── parser_test.go            # 13 tests
 ├── Dockerfile                    # Multi-stage, CGO_ENABLED=0
 ├── compose.yml                   # Production: db + app (port 8082)
-├── compose-dev.yml               # Dev: db only
 ├── go.mod / go.sum
 └── README.md
 ```

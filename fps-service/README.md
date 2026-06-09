@@ -381,7 +381,6 @@ fps-service/
 │   └── message_test.go         # 7 tests
 ├── Dockerfile                  # Multi-stage, CGO_ENABLED=1 (libxml2 XSD validation)
 ├── compose.yml                 # Production: db + app (port 8081)
-├── compose-dev.yml             # Dev: db only
 ├── go.mod / go.sum
 └── README.md
 ```

@@ -363,8 +363,8 @@ In demo mode, cycle durations and tick intervals are compressed according to
 
 ### Docker Compose
 
-Each service has a production `compose.yml` and a dev `compose-dev.yml`. The
-root `compose.yml` orchestrates all three services together.
+Each service has a production `compose.yml`. The root `compose.yml` orchestrates
+all three services together.
 
 ```yaml
 services:

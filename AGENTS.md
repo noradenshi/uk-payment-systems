@@ -110,7 +110,7 @@ A trigger on `journal_entries` fires `pg_notify('liquidity_event', account_bic)`
 4. Create `pkg/ledger/service.go` — settlement logic
 5. Create `pkg/{format}/` for message models
 6. Create `internal/db/` for migrations
-7. Create `Dockerfile`, `compose.yml`, `compose-dev.yml`
+7. Create `Dockerfile`, `compose.yml`
 8. Use `/v1/payments/{scheme}/...` for payments, `/v1/participants/...` for participants
 9. Use same `participant_profiles` table or shared participant registry across services
 
@@ -165,7 +165,7 @@ A trigger on `journal_entries` fires `pg_notify('liquidity_event', account_bic)`
 - Static link libxml2 with CGO (CHAPS and FPS only; BACS is CGO-free)
 - Port 8080 (CHAPS), 8081 (FPS), 8082 (BACS)
 - DB runs in separate container (Postgres 18-alpine)
-- `compose.yml` for production, `compose-dev.yml` for dev (DB only)
+- `compose.yml` for production (DB + app)
 
 ### Testing
 - Test files exist for ISO 8583 parser, ISO 20022 serialization, and Standard 18 parser:
@@ -176,7 +176,7 @@ A trigger on `journal_entries` fires `pg_notify('liquidity_event', account_bic)`
   - `fps-service/pkg/iso20022/serialization_test.go` — 14 tests (includes pacs.008 sort code XML parsing)
   - `fps-service/pkg/server/server_test.go` — 4 tests (JSON sort code and register sort code tests)
   - `bacs-service/pkg/standard18/parser_test.go` — 13 tests (basic file, AUDDIS, CRLF, validation, pence conversion, multiple records, line padding, zero values)
-- Integration smoke test: `test/integration_test.sh` — starts DBs via `compose-dev.yml`, builds & runs services, runs HTTP smoke tests (participants, cycles, etc.)
+- Integration smoke test: `test/integration_test.sh` — runs HTTP smoke tests (participants, cycles, etc.)
 - When adding tests:
   - Go: `_test.go` files alongside source with `package X_test`
   - Frontend: Vitest or React Testing Library
@@ -345,4 +345,4 @@ Each service maintains its own `participant_profiles` table with scheme-specific
 
 The same 4 banks are seeded in all three services but with scheme-specific balances and attributes.
 
-The only cross-service integration is the optional **central-bank-service**, which makes HTTP REST calls (`POST /v1/liquidity/top-up`) to each service to manage liquidity. It has no database of its own.
+A hypothetical central bank service could make HTTP REST calls (`POST /v1/liquidity/top-up`) to manage liquidity across schemes.

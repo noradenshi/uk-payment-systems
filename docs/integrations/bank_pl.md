@@ -376,9 +376,8 @@ z `demo_session_minutes` w `config/sessions.json`.
 
 ### Docker Compose
 
-Każda usługa ma produkcyjny `compose.yml` i deweloperski `compose-dev.yml`.
-Główny `compose.yml` w katalogu głównym orkiestruje wszystkie trzy usługi
-razem.
+Każda usługa ma produkcyjny `compose.yml`. Główny `compose.yml` w katalogu
+głównym orkiestruje wszystkie trzy usługi razem.
 
 ```yaml
 services:

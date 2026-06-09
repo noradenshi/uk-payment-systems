@@ -320,7 +320,6 @@ chaps-service/
 │   └── package.json              # React 18, Vite 5, TypeScript 5
 ├── Dockerfile                    # Multi-stage: golang:1.26-alpine → alpine:3.23, static CGO
 ├── compose.yml                   # Production: db (Postgres 18) + app (port 8080)
-├── compose-dev.yml               # Dev: db only (app runs on host)
 ├── go.mod / go.sum
 └── README.md
 ```
