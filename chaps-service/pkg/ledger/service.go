@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"chaps-service/pkg/auth"
 	"context"
 	"errors"
 	"fmt"
@@ -338,12 +339,14 @@ func (s *LedgerService) LookupBankByName(ctx context.Context, name string) (stri
 	return bic, nil
 }
 
-func (s *LedgerService) RegisterParticipant(ctx context.Context, bic, name, sortCode string, initialBalance float64) error {
-	if sortCode == "" {
-		sortCode = ""
+func (s *LedgerService) RegisterParticipant(ctx context.Context, bic, name, sortCode string, initialBalance float64) (string, error) {
+	apiKey, err := auth.GenerateAPIKey()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate API key: %w", err)
 	}
-	return pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, "INSERT INTO participant_profiles (bic_code, name, sort_code) VALUES ($1, $2, NULLIF($3, ''))", bic, name, sortCode); err != nil {
+
+	err = pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, "INSERT INTO participant_profiles (bic_code, name, sort_code, api_key) VALUES ($1, $2, $3, $4)", bic, name, sortCode, apiKey); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, "INSERT INTO participant_statuses (bic_code) VALUES ($1)", bic); err != nil {
@@ -354,6 +357,31 @@ func (s *LedgerService) RegisterParticipant(ctx context.Context, bic, name, sort
 		}
 		return nil
 	})
+	if err != nil {
+		return "", err
+	}
+	return apiKey, nil
+}
+
+func (s *LedgerService) ValidateAPIKey(ctx context.Context, apiKey string) (string, error) {
+	var bic string
+	err := s.Pool.QueryRow(ctx, "SELECT bic_code FROM participant_profiles WHERE api_key = $1", apiKey).Scan(&bic)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", auth.ErrInvalidAPIKey
+		}
+		return "", err
+	}
+	return bic, nil
+}
+
+func (s *LedgerService) GetSortCode(ctx context.Context, bic string) (string, error) {
+	var sortCode string
+	err := s.Pool.QueryRow(ctx, "SELECT sort_code FROM participant_profiles WHERE bic_code = $1", bic).Scan(&sortCode)
+	if err != nil {
+		return "", err
+	}
+	return sortCode, nil
 }
 
 func (s *LedgerService) UnblockParticipant(ctx context.Context, bic string) error {

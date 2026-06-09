@@ -60,7 +60,7 @@ CHAPS processes **high-value** payments in **real-time gross settlement (RTGS)**
 
 | Method | Endpoint | Description | Status |
 | :--- | :--- | :--- | :--- |
-| **GET** | `/v1/system/schedule` | Today's cut-off times: opening (`06:00`), customer cut-off (`17:40`), interbank cut-off (`18:00`). | Done |
+| **GET** | `/v1/system/schedule` | Today's cut-off times: opening (`06:00`), interbank cut-off (`18:00`). | Done |
 
 ---
 
@@ -251,7 +251,6 @@ A trigger on `journal_entries` fires `pg_notify('liquidity_event', NEW.account_b
 
 ```
 Opening Time:        06:00 (Europe/London)
-Customer Cut-off:    17:40
 Interbank Cut-off:   18:00
 ```
 

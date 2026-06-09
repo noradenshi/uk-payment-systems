@@ -3,7 +3,8 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE TABLE participant_profiles (
     bic_code VARCHAR(11) PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
-    sort_code VARCHAR(9),
+    sort_code VARCHAR(9) NOT NULL,
+    api_key VARCHAR(64) UNIQUE,
     currency VARCHAR(3) DEFAULT 'GBP',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );

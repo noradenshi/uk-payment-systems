@@ -6,7 +6,8 @@ CREATE TYPE payment_status AS ENUM ('PENDING', 'QUEUED', 'SETTLED', 'REJECTED');
 CREATE TABLE participant_profiles (
     bic_code VARCHAR(11) PRIMARY KEY,
     name TEXT NOT NULL,
-    sort_code VARCHAR(9),
+    sort_code VARCHAR(9) NOT NULL,
+    api_key VARCHAR(64) UNIQUE,
     currency VARCHAR(3) DEFAULT 'GBP',
     participant_type VARCHAR(10) NOT NULL DEFAULT 'DIRECT' CHECK (participant_type IN ('DIRECT', 'INDIRECT')),
     sponsor_bic VARCHAR(11),

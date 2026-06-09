@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"bacs-service/pkg/auth"
 	"context"
 	"errors"
 	"fmt"
@@ -25,9 +26,14 @@ var ErrInsufficientFunds = errors.New("insufficient funds")
 
 // ── Participant operations ──
 
-func (s *LedgerService) RegisterParticipant(ctx context.Context, bic, name string, initialBalance float64, suCode string, isSU, isDSU bool) error {
-	return pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `INSERT INTO participant_profiles (bic_code, name, su_code, is_service_user, is_destination_user) VALUES ($1,$2,$3,$4,$5)`, bic, name, suCode, isSU, isDSU); err != nil {
+func (s *LedgerService) RegisterParticipant(ctx context.Context, bic, name string, initialBalance float64, sortCode, suCode string, isSU, isDSU bool) (string, error) {
+	apiKey, err := auth.GenerateAPIKey()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate API key: %w", err)
+	}
+
+	err = pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `INSERT INTO participant_profiles (bic_code, name, su_code, sort_code, api_key, is_service_user, is_destination_user) VALUES ($1,$2,$3,$4,$5,$6,$7)`, bic, name, suCode, sortCode, apiKey, isSU, isDSU); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO participant_statuses (bic_code) VALUES ($1)`, bic); err != nil {
@@ -38,11 +44,36 @@ func (s *LedgerService) RegisterParticipant(ctx context.Context, bic, name strin
 		}
 		return nil
 	})
+	if err != nil {
+		return "", err
+	}
+	return apiKey, nil
+}
+
+func (s *LedgerService) ValidateAPIKey(ctx context.Context, apiKey string) (string, error) {
+	var bic string
+	err := s.Pool.QueryRow(ctx, "SELECT bic_code FROM participant_profiles WHERE api_key = $1", apiKey).Scan(&bic)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", auth.ErrInvalidAPIKey
+		}
+		return "", err
+	}
+	return bic, nil
+}
+
+func (s *LedgerService) GetSortCode(ctx context.Context, bic string) (string, error) {
+	var sortCode string
+	err := s.Pool.QueryRow(ctx, "SELECT sort_code FROM participant_profiles WHERE bic_code = $1", bic).Scan(&sortCode)
+	if err != nil {
+		return "", err
+	}
+	return sortCode, nil
 }
 
 func (s *LedgerService) ListParticipants(ctx context.Context) ([]map[string]interface{}, error) {
 	rows, err := s.Pool.Query(ctx, `
-		SELECT p.bic_code, p.name, p.su_code, p.is_service_user, p.is_destination_user,
+		SELECT p.bic_code, p.name, p.su_code, p.sort_code, p.is_service_user, p.is_destination_user,
 		       COALESCE(st.status::text,'ACTIVE'), COALESCE(l.balance,0), p.currency,
 		       COALESCE(st.is_closed,false), st.block_reason, COALESCE(st.overdraft_limit,0)
 		FROM participant_profiles p
@@ -57,11 +88,11 @@ func (s *LedgerService) ListParticipants(ctx context.Context) ([]map[string]inte
 	var result []map[string]interface{}
 	for rows.Next() {
 		var bic, name, status, currency string
-		var suCode, blockReason *string
+		var suCode, sortCode, blockReason *string
 		var isSU, isDSU, isClosed bool
 		var balance float64
 		var overdraftLimit float64
-		if err := rows.Scan(&bic, &name, &suCode, &isSU, &isDSU, &status, &balance, &currency, &isClosed, &blockReason, &overdraftLimit); err != nil {
+		if err := rows.Scan(&bic, &name, &suCode, &sortCode, &isSU, &isDSU, &status, &balance, &currency, &isClosed, &blockReason, &overdraftLimit); err != nil {
 			return nil, err
 		}
 		entry := map[string]interface{}{
@@ -77,6 +108,9 @@ func (s *LedgerService) ListParticipants(ctx context.Context) ([]map[string]inte
 		}
 		if suCode != nil {
 			entry["su_code"] = *suCode
+		}
+		if sortCode != nil {
+			entry["sort_code"] = *sortCode
 		}
 		if blockReason != nil {
 			entry["block_reason"] = *blockReason
@@ -443,8 +477,14 @@ func (s *LedgerService) StoreTransactions(ctx context.Context, submissionID stri
 		if err := tx.QueryRow(ctx, `SELECT su_bic FROM bacs_submissions WHERE id = $1`, submissionID).Scan(&suBic); err != nil {
 			return err
 		}
+
+		sortMap, err := buildSortCodeMap(ctx, tx)
+		if err != nil {
+			return err
+		}
+
 		for _, d := range debits {
-			destBic := inferDestinationBIC(fmt.Sprint(d["dest_sort_code"]), suBic)
+			destBic := lookupBICBySortCode(fmt.Sprint(d["dest_sort_code"]), suBic, sortMap)
 			_, err := tx.Exec(ctx, `
 				INSERT INTO bacs_transactions (submission_id, record_type, volume_header_no, dest_sort_code, dest_account, debtor_bic, creditor_bic, amount, originator_ref, reference, su_code, status)
 				VALUES ($1, 'DIRECT_DEBIT', $2, $3, $4, $5, $6, $7, $8, $9, $10, 'PENDING')`,
@@ -455,7 +495,7 @@ func (s *LedgerService) StoreTransactions(ctx context.Context, submissionID stri
 			}
 		}
 		for _, c := range credits {
-			destBic := inferDestinationBIC(fmt.Sprint(c["dest_sort_code"]), suBic)
+			destBic := lookupBICBySortCode(fmt.Sprint(c["dest_sort_code"]), suBic, sortMap)
 			_, err := tx.Exec(ctx, `
 				INSERT INTO bacs_transactions (submission_id, record_type, volume_header_no, dest_sort_code, dest_account, debtor_bic, creditor_bic, amount, originator_ref, reference, su_code, status)
 				VALUES ($1, 'DIRECT_CREDIT', $2, $3, $4, $5, $6, $7, $8, $9, $10, 'PENDING')`,
@@ -465,28 +505,40 @@ func (s *LedgerService) StoreTransactions(ctx context.Context, submissionID stri
 				return err
 			}
 		}
-		_, err := tx.Exec(ctx, `UPDATE bacs_submissions SET status = 'ACCEPTED' WHERE id = $1`, submissionID)
+		_, err = tx.Exec(ctx, `UPDATE bacs_submissions SET status = 'ACCEPTED' WHERE id = $1`, submissionID)
 		return err
 	})
 }
 
-func inferDestinationBIC(sortCode string, fallback string) string {
+func buildSortCodeMap(ctx context.Context, tx pgx.Tx) (map[string]string, error) {
+	rows, err := tx.Query(ctx, `SELECT bic_code, sort_code FROM participant_profiles WHERE sort_code IS NOT NULL`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := make(map[string]string)
+	for rows.Next() {
+		var bic, sc string
+		if err := rows.Scan(&bic, &sc); err != nil {
+			return nil, err
+		}
+		compact := strings.ReplaceAll(sc, "-", "")
+		if len(compact) >= 6 {
+			m[compact[:6]] = bic
+		}
+	}
+	return m, rows.Err()
+}
+
+func lookupBICBySortCode(sortCode, fallback string, sortMap map[string]string) string {
 	compact := strings.ReplaceAll(sortCode, "-", "")
 	if len(compact) >= 6 {
 		compact = compact[:6]
 	}
-	switch compact {
-	case "200415", "200000", "202015":
-		return "BARCGB2L"
-	case "400515", "400000", "401515":
-		return "HSBCGB44"
-	case "309634", "300000", "309000":
-		return "LLOYGB21"
-	case "609104", "600000", "609000":
-		return "SNDRUK22"
-	default:
-		return fallback
+	if bic, ok := sortMap[compact]; ok {
+		return bic
 	}
+	return fallback
 }
 
 func (s *LedgerService) GetTransactions(ctx context.Context, submissionID string) ([]map[string]interface{}, error) {

@@ -1,15 +1,15 @@
 TRUNCATE participant_liquidity, participant_statuses, participant_profiles CASCADE;
 
-WITH seed_data (bic, name, bal, su_code, is_su, is_dsu) AS (
+WITH seed_data (bic, name, bal, su_code, sc, is_su, is_dsu, ak) AS (
     VALUES
-        ('BARCGB2L', 'Barclays Bank', 1000000.00, 'SU-BARC', true, true),
-        ('HSBCGB44', 'HSBC UK', 800000.00, 'SU-HSBC', true, true),
-        ('LLOYGB21', 'Lloyds Bank', 750000.00, 'SU-LLOY', true, true),
-        ('SNDRUK22', 'Alice Bank', 500000.00, 'SU-ALCE', true, true)
+        ('BARCGB2L', 'Barclays Bank', 1000000.00, 'SU-BARC', '20-00-00', true, true, 'ak_barcgb2l_dev'),
+        ('HSBCGB44', 'HSBC UK', 800000.00, 'SU-HSBC', '40-00-00', true, true, 'ak_hsbcgb44_dev'),
+        ('LLOYGB21', 'Lloyds Bank', 750000.00, 'SU-LLOY', '30-00-00', true, true, 'ak_lloygb21_dev'),
+        ('SNDRUK22', 'Alice Bank', 500000.00, 'SU-ALCE', '60-00-00', true, true, 'ak_sndruk22_dev')
 ),
 ins_profiles AS (
-    INSERT INTO participant_profiles (bic_code, name, su_code, is_service_user, is_destination_user)
-    SELECT bic, name, su_code, is_su::boolean, is_dsu::boolean FROM seed_data
+    INSERT INTO participant_profiles (bic_code, name, su_code, sort_code, api_key, is_service_user, is_destination_user)
+    SELECT bic, name, su_code, sc, ak, is_su::boolean, is_dsu::boolean FROM seed_data
     RETURNING bic_code
 ),
 ins_statuses AS (

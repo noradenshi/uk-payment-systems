@@ -132,7 +132,7 @@ Response is `pacs.002.001.16` with status:
 - `PDNG` — Pending (liquidity check queued for DNS)
 - `RJCT` — Rejected
 
-**Note**: FPS does not use XSD validation (CGO-free). XML is parsed directly via Go's `encoding/xml`.
+**Note**: FPS validates ISO 20022 XML against XSD schemas via libxml2 (requires CGO). Invalid XML is rejected with `RJCT`/`XMLI`.
 
 ---
 
@@ -379,7 +379,7 @@ fps-service/
 ├── pkg/iso8583/
 │   ├── message.go              # 0200/0210 structs, bitmap parsing (221 lines)
 │   └── message_test.go         # 7 tests
-├── Dockerfile                  # Multi-stage, CGO_ENABLED=0
+├── Dockerfile                  # Multi-stage, CGO_ENABLED=1 (libxml2 XSD validation)
 ├── compose.yml                 # Production: db + app (port 8081)
 ├── compose-dev.yml             # Dev: db only
 ├── go.mod / go.sum

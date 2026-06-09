@@ -1,10 +1,10 @@
-# KLIK → CHAPS Integration (UKPS)
+# Integracja KLIK → CHAPS (UKPS)
 
-KLIK sends interbank transfers to the RTGS system after performing netting.
-`chaps-service` exposes the `/v1/klik/chaps/settle` endpoint, which accepts
-KLIK's format and maps it to internal CHAPS settlement.
+KLIK wysyła przelewy międzybankowe do systemu RTGS po wykonaniu nettingu.
+`chaps-service` udostępnia endpoint `/v1/klik/chaps/settle`, który przyjmuje
+format KLIK-a i mapuje go na wewnętrzne rozliczenie CHAPS.
 
-## How It Works
+## Jak to działa
 
 ```
 KLIK                              chaps-service (UKPS)
@@ -14,26 +14,26 @@ KLIK                              chaps-service (UKPS)
  │   from, to, amount, currency}         │
  │ ────────────────────────────────────► │
  │                                       │
- │  • validation: GBP, correct amount    │
- │  • bank lookup by name in DB          │
- │  • CHAPS operating hours check        │
- │  • execute settlement                 │
+ │  • walidacja: GBP, poprawna kwota     │
+ │  • lookup banku po nazwie w DB        │
+ │  • sprawdzenie godzin pracy CHAPS     │
+ │  • wykonanie settlementu              │
  │                                       │
  │  {transfer_id, status,                │
  │   rtgs_reference, failure_reason}     │
  │ ◄──────────────────────────────────── │
 ```
 
-Banks are identified by **name** (`participant_profiles.name`), which is
-unique. KLIK must use the exact same names under which banks are registered
-in CHAPS.
+Banki są identyfikowane po **nazwie** (`participant_profiles.name`), która jest
+unikalna. KLIK musi używać dokładnie tych samych nazw, pod którymi banki są
+zarejestrowane w CHAPS.
 
-## Endpoints
+## Endpointy
 
-| Method | Path | Description |
+| Metoda | Ścieżka | Opis |
 |---|---|---|
 | `GET` | `/v1/klik/chaps/healthz` | Health check |
-| `POST` | `/v1/klik/chaps/settle` | Execute transfer |
+| `POST` | `/v1/klik/chaps/settle` | Wykonanie przelewu |
 
 ## Health check
 
@@ -46,10 +46,10 @@ docker run --rm --network chaps_klik curlimages/curl \
 {"status":"ok","system":"CHAPS"}
 ```
 
-## Transfer — bank does not exist in CHAPS
+## Przelew — bank nie istnieje w serwisie CHAPS
 
-When KLIK sends a bank name that is not present in `participant_profiles`,
-we return `FAILED` with information about which bank is unknown.
+Gdy KLIK wyśle nazwę banku, która nie figuruje w `participant_profiles`,
+zwracamy `FAILED` z informacją który bank jest nieznany.
 
 ```bash
 docker run --rm --network chaps_klik curlimages/curl \
@@ -70,10 +70,10 @@ docker run --rm --network chaps_klik curlimages/curl \
 {"transfer_id":"klik-test-001","status":"FAILED","rtgs_reference":"","failure_reason":"unknown receiver bank: HSBC"}
 ```
 
-## Transfer — success
+## Przelew — sukces
 
-All banks known, sufficient liquidity, CHAPS operating hours — transfer
-executed.
+Wszystkie banki znane, płynność wystarczająca, godziny pracy CHAPS — przelew
+wykonany.
 
 ```bash
 docker run --rm --network chaps_klik curlimages/curl \
@@ -94,18 +94,18 @@ docker run --rm --network chaps_klik curlimages/curl \
 {"transfer_id":"klik-test-001","status":"SUCCESS","rtgs_reference":"CHAPS-KLIK-TEST-00"}
 ```
 
-## KLIK-side Configuration
+## Konfiguracja po stronie KLIK
 
-Changes in `.env`:
+Zmiany w `.env`:
 
 ```
 CHAPS_URL=http://chaps-app:8080/v1/klik/chaps
 ```
 
-Changes in `docker-compose.yml`:
+Zmiany w `docker-compose.yml`:
 
-- The KLIK container must be on the same Docker network as `chaps-app`: `chaps_klik`
-- The named network `chaps_klik` must be added to the `rtgs_mock` service
+- Kontener KLIK-a musi być na wspólnej sieci Docker z `chaps-app`: `chaps_klik`
+- Nazwaną sieć `chaps_klik` należy dodać do serwisu `rtgs_mock`
 
 ```yaml
 rtgs-mock:
@@ -120,17 +120,16 @@ networks:
     name: chaps_klik
 ```
 
-## Bank List
+## Lista banków
 
-Current banks registered in CHAPS (seed):
+Aktualne banki zarejestrowane w CHAPS (seed):
 
-| DB Name (`name`) | BIC |
+| Nazwa w DB (`name`) | BIC |
 |---|---|
 | Alice Bank | `SNDRUK22` |
 | Barclays Bank | `BARCGB2L` |
 | HSBC UK | `HSBCGB44` |
 | Lloyds Bank | `LLOYGB21` |
 
-KLIK must use these exact names in the `from` / `to` fields. New banks can
-be added via `POST /v1/participants/register` and are immediately available
-to KLIK.
+KLIK musi używać tych samych nazw w polu `from` / `to`. Nowe banki można
+dodać przez `POST /v1/participants/register` i są od razu dostępne dla KLIK.

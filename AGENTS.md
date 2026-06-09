@@ -78,10 +78,10 @@ RETURNING id, status
 If status is already `SETTLED`, return cached `ACTC` result.
 
 #### 5. Normalized DB schema (5 tables)
-- `participant_profiles` — static BIC/name/currency/sort_code (UK bank sort code, optional)
+- `participant_profiles` — static BIC/name/currency/sort_code (UK bank sort code, required)
 - `participant_liquidity` — high-frequency balance updates
 - `participant_statuses` — ACTIVE/SUSPENDED/DISABLED + block info
-- `transactions` — payment records, UUID v7 primary key, includes optional sender/receiver sort codes
+- `transactions` — payment records, UUID v7 primary key, includes sender/receiver sort codes (required in JSON/XML, empty in ISO 8583)
 - `journal_entries` — immutable audit trail with `pg_notify` trigger
 
 #### 6. ISO 20022 message flow
@@ -128,9 +128,11 @@ A trigger on `journal_entries` fires `pg_notify('liquidity_event', account_bic)`
 ### API style
 - Paths: `/v1/{resource}/{scheme}[/{id}[/action]]`
 - JSON for GUI/admin, XML for ISO 20022 external messages
-- SSE: `GET /v1/payments/{scheme}/incoming/{bic}` for real-time payment events
+- Authentication via `Authorization: Bearer <api_key>` header. All authenticated endpoints require it. The BIC is derived from the API key — paths no longer carry `{bic}` parameters.
+- SSE: `GET /v1/payments/{scheme}/incoming` for real-time payment events (BIC from auth header)
 - Error responses: `{"error": "message"}`
 - HTTP status codes: 200 (success), 201 (created), 202 (accepted), 400 (bad request), 404 (not found), 409 (conflict), 500 (internal error), 503 (unavailable)
+- Health: `GET /v1/healthz` returns `{"status":"ok"}` (unauthenticated)
 
 ### Database conventions
 - Use `DECIMAL(20, 2)` for monetary amounts
@@ -146,6 +148,7 @@ A trigger on `journal_entries` fires `pg_notify('liquidity_event', account_bic)`
 - `pgx.BeginFunc` for transactional logic
 - `log.Printf` for logging (no structured logging yet)
 - `encoding/xml` + `encoding/json` for serialization
+- `github.com/lestrrat-go/libxml2` + XSD validation for ISO 20022 (CHAPS and FPS)
 - Package name matches directory name
 - Error sentinel values: `var ErrX = errors.New("...")`
 - `pkg/events/events.go` — in-memory EventBus for SSE real-time notifications
@@ -159,8 +162,8 @@ A trigger on `journal_entries` fires `pg_notify('liquidity_event', account_bic)`
 
 ### Docker conventions
 - Multi-stage build: `golang:1.26-alpine` → `alpine:3.23`
-- Static link libxml2 with CGO
-- Port 8080
+- Static link libxml2 with CGO (CHAPS and FPS only; BACS is CGO-free)
+- Port 8080 (CHAPS), 8081 (FPS), 8082 (BACS)
 - DB runs in separate container (Postgres 18-alpine)
 - `compose.yml` for production, `compose-dev.yml` for dev (DB only)
 
@@ -184,10 +187,10 @@ A trigger on `journal_entries` fires `pg_notify('liquidity_event', account_bic)`
 All three services support server-sent events for real-time payment notifications.
 
 | Service | Endpoint | Published On | Event Type |
-|---|---|---|---|
-| CHAPS | `GET /v1/payments/chaps/incoming/{bic}` | Each `ACTC` settlement | `payment.received` |
-| FPS | `GET /v1/payments/fps/incoming/{bic}` | Each `ACTC` settlement | `payment.received` |
-| BACS | `GET /v1/payments/bacs/incoming/{bic}` | Cycle `SettleCycle` call | `cycle.settled` |
+|---|---|---|---|---|
+| CHAPS | `GET /v1/payments/chaps/incoming` | Each `ACTC` settlement | `payment.received` |
+| FPS | `GET /v1/payments/fps/incoming` | Each `ACTC` settlement | `payment.received` |
+| BACS | `GET /v1/payments/bacs/incoming` | Cycle `SettleCycle` call | `cycle.settled` |
 
 - Uses in-memory `pkg/events.EventBus` (map of BIC → channel fan-out)
 - `NewEventBus()` → `Publish(bic, event)` / `Subscribe(bic, buf)` / `PublishToAll(bics, event)`
@@ -286,17 +289,17 @@ Scheduler starts in `main.go` via `srv.StartScheduler(schedCtx)` and stops clean
 ## Important Gotchas
 
 1. **Route ordering matters**: `/v1/payments/chaps/validate` must be registered **before** `/v1/payments/chaps/{id}` or Go 1.22 mux will match `{id}` = "validate". Look at `RegisterRoutes` — validate is listed before the `{id}` routes.
-2. **CGO is required**: libxml2 bindings use CGO. Build with musl tags for Alpine.
+2. **CGO is required for CHAPS and FPS**: libxml2 bindings for XSD validation use CGO. Build with musl tags for Alpine. BACS is CGO-free.
 3. **Database URL forces TCP**: Default `DATABASE_URL` uses `127.0.0.1` instead of `localhost` to avoid Unix socket ambiguity.
 4. **Postgres 18 specific**: uses `uuidv7()` function not present in older versions.
-5. **No auth**: Authorization endpoint is a stub. No real 2FA or digital signature verification.
+5. **Auth via API key**: All authenticated endpoints require `Authorization: Bearer <api_key>`. The BIC is derived from the API key via a DB lookup in the auth middleware. `GET /v1/healthz` is the only unauthenticated endpoint. The `POST /v1/participants/register` endpoint returns the generated `api_key` in the response body.
 6. **`xsd/chaps_wrapper.xsd`** is a *custom* envelope — not standard ISO 20022. It wraps `AppHdr` + `Document` for single-XSD validation.
 7. **pacs.009 and pacs.029 XSDs** are included but unused — available for extension (bank-to-bank transfers, investigation messages).
-8. **FPS and BACS are CGO-free**: Both build with `CGO_ENABLED=0`. Only CHAPS requires CGO (libxml2 XSD validation).
+8. **FPS and CHAPS require CGO**: Both use libxml2 for XSD validation (via `pkg/validator/`). BACS builds with `CGO_ENABLED=0` (no XSD validation needed — Standard 18 uses Go's native parser).
 9. **ISO 8583 bitmap encoding**: Bits in the primary bitmap are numbered 1-64 (MSB of byte 0 = bit 1). Bits 65-128 use the secondary bitmap, signaled by bit 1 (MSB) of the primary bitmap. The parser reads bitmap as `binary.BigEndian.Uint64` and checks presence via `1 << (64 - bit)` for primary, `1 << (128 - bit)` for secondary.
 10. **Standard 18 amount conversion**: All monetary amounts in BACS Standard 18 files are stored as pence (whole integers). The parser divides by 100.0 to produce GBP float values. This applies to Record 1 (TotalValue), Record 3 (Amount), Record 4 (Amount), Record 9 (TotalValue), and Record A (Amount).
 11. **FPS content-type dispatch**: `ProcessPayment` handles three content types — `application/json` (direct entry), `application/xml` (ISO 20022 pacs.008), and `application/octet-stream` (ISO 8583 binary 0200 message). Each is routed to a dedicated handler. The ISO 8583 handler converts DE4 from pence to pounds (`amount/100.0`) before settlement.
-12. **Sort code support**: BACS (Standard 18 parser), CHAPS (ISO 20022 + JSON API), and FPS (ISO 20022 + JSON API) all support UK bank sort codes. In CHAPS and FPS, sort codes are optional fields on `participant_profiles.sort_code` and `transactions.sender_sort_code`/`receiver_sort_code`. XML pacs.008 messages parse sort codes from `ClrSysMmbId>MmbId` within `FinInstnId`. ISO 8583 does not carry sort codes (empty strings passed). Sort codes are stored as `VARCHAR(9)` — either `XX-XX-XX` or `XXXXXX` format.
+12. **Sort code support**: BACS (Standard 18 parser), CHAPS (ISO 20022 + JSON API), and FPS (ISO 20022 + JSON API) all require UK bank sort codes for participant registration (`participant_profiles.sort_code` is `NOT NULL`). Transaction-level sort codes (`sender_sort_code`/`receiver_sort_code`) are required for JSON and XML payments; ISO 8583 does not carry sort codes (empty strings passed). XML pacs.008 messages parse sort codes from `ClrSysMmbId>MmbId` within `FinInstnId`. Sort codes are stored as `VARCHAR(9)` — either `XX-XX-XX` or `XXXXXX` format.
 13. **Gridlock retry on settlement**: When a payment fails due to insufficient liquidity (PDNG/INSU), `SettlePayment` and `SettleSIP` automatically call `ResolveGridlock()` and retry once before queueing. This ensures incoming queued payments are settled first, potentially freeing up liquidity. Only PDNG triggers the retry — not RJCT or ACTC.
 14. **SSE EventBus is in-memory**: The `pkg/events.EventBus` uses a `map[BIC][]chan` with no persistence. Events published before a client connects are lost. Reconnecting clients only receive events published after reconnection. This is by design — SSE is for real-time notifications, not durable event sourcing.
 15. **FPS ISO 8583 TCP socket**: FPS listens on `:7421` (configurable via `ISO8583_PORT` env var) for raw TCP connections. Uses 2-byte big-endian length prefix framing, max 4096 bytes per message, goroutine-per-connection. The TCP handler uses the same `Ledger.SettleSIP` and `Events.Publish` calls as the HTTP handler.
@@ -306,19 +309,40 @@ Scheduler starts in `main.go` via `srv.StartScheduler(schedCtx)` and stops clean
 ## How This Fits Together: UKPS Architecture
 
 ```
-┌────────────────────┐     ┌────────────────────┐     ┌────────────────────┐
-│   bacs-service     │     │    fps-service      │     │   chaps-service    │
-│   (Standard 18)    │     │ (ISO20022+ISO8583)  │     │   (ISO 20022)      │
-│   Batch / 3-day    │     │   Near-real-time    │     │   RTGS / High-val  │
-└────────┬───────────┘     └────────┬────────────┘     └────────┬───────────┘
-         │                          │                          │
-         └──────────────────────────┼──────────────────────────┘
-                                    │
-                    ┌───────────────▼────────────────┐
-                    │        PostgreSQL 18            │
-                    │  (shared participants,          │
-                    │   separate transaction tables)  │
-                    └────────────────────────────────┘
+┌────────────────────┐    ┌─────────────────────┐    ┌────────────────────┐
+│   bacs-service     │    │    fps-service      │    │   chaps-service    │
+│   (Standard 18)    │    │ (ISO20022+ISO8583)  │    │   (ISO 20022)      │
+│   Batch / 3-day    │    │   Near-real-time    │    │   RTGS / High-val  │
+│   Port 8082        │    │   Port 8081         │    │   Port 8080        │
+└────────┬───────────┘    └────────┬────────────┘    └────────┬───────────┘
+         │                         │                         │
+         ▼                         ▼                         ▼
+┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│  PostgreSQL 18   │    │  PostgreSQL 18   │    │  PostgreSQL 18   │
+│  bacs_ledger     │    │  fps_ledger      │    │  chaps_ledger    │
+│  Port 5434       │    │  Port 5433       │    │  Port 5432       │
+│  • participants  │    │  • participants  │    │  • participants  │
+│  • cycles        │    │  • dns_cycles    │    │  • transactions  │
+│  • submissions   │    │  • transactions  │    │  • journal       │
+│  • transactions  │    │  • standing_ord  │    │                  │
+│  • net positions │    │  • forward_dated │    │                  │
+│  • journal       │    │  • journal       │    │                  │
+└──────────────────┘    └──────────────────┘    └──────────────────┘
 ```
 
-Each service is an independent Go binary + optional React GUI, deployable together via Docker Compose. Services share a participant registry conceptually but keep their own transaction tables.
+Each service is an independent Go binary + optional React GUI, deployable together via Docker Compose. They communicate with external systems via HTTP (all three), ISO 8583 TCP socket (FPS), or file upload (BACS). There is **no direct inter-service database access** — each service has its own isolated PostgreSQL instance with its own participant registry.
+
+Each service maintains its own `participant_profiles` table with scheme-specific columns:
+
+| Column | CHAPS | FPS | BACS |
+|---|---|---|---|
+| `sort_code` | ✅ optional | ✅ optional | ❌ |
+| `participant_type` (DIRECT/INDIRECT) | ❌ | ✅ | ❌ |
+| `sponsor_bic` | ❌ | ✅ | ❌ |
+| `su_code` | ❌ | ❌ | ✅ |
+| `is_service_user` | ❌ | ❌ | ✅ |
+| `is_destination_user` | ❌ | ❌ | ✅ |
+
+The same 4 banks are seeded in all three services but with scheme-specific balances and attributes.
+
+The only cross-service integration is the optional **central-bank-service**, which makes HTTP REST calls (`POST /v1/liquidity/top-up`) to each service to manage liquidity. It has no database of its own.

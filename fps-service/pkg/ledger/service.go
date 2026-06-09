@@ -2,9 +2,12 @@ package ledger
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
+
+	"fps-service/pkg/auth"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -27,9 +30,14 @@ type SettlementResult struct {
 	ReasonCode string
 }
 
-func (s *LedgerService) RegisterParticipant(ctx context.Context, bic, name, sortCode string, initialBalance float64, pType, sponsorBic string) error {
-	return pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, "INSERT INTO participant_profiles (bic_code, name, sort_code, participant_type, sponsor_bic) VALUES ($1, $2, NULLIF($3, ''), $4, NULLIF($5, ''))", bic, name, sortCode, pType, sponsorBic); err != nil {
+func (s *LedgerService) RegisterParticipant(ctx context.Context, bic, name, sortCode string, initialBalance float64, pType, sponsorBic string) (string, error) {
+	apiKey, err := auth.GenerateAPIKey()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate API key: %w", err)
+	}
+
+	err = pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, "INSERT INTO participant_profiles (bic_code, name, sort_code, api_key, participant_type, sponsor_bic) VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''))", bic, name, sortCode, apiKey, pType, sponsorBic); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, "INSERT INTO participant_statuses (bic_code) VALUES ($1)", bic); err != nil {
@@ -40,6 +48,31 @@ func (s *LedgerService) RegisterParticipant(ctx context.Context, bic, name, sort
 		}
 		return nil
 	})
+	if err != nil {
+		return "", err
+	}
+	return apiKey, nil
+}
+
+func (s *LedgerService) ValidateAPIKey(ctx context.Context, apiKey string) (string, error) {
+	var bic string
+	err := s.Pool.QueryRow(ctx, "SELECT bic_code FROM participant_profiles WHERE api_key = $1", apiKey).Scan(&bic)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", auth.ErrInvalidAPIKey
+		}
+		return "", err
+	}
+	return bic, nil
+}
+
+func (s *LedgerService) GetSortCode(ctx context.Context, bic string) (string, error) {
+	var sortCode string
+	err := s.Pool.QueryRow(ctx, "SELECT sort_code FROM participant_profiles WHERE bic_code = $1", bic).Scan(&sortCode)
+	if err != nil {
+		return "", err
+	}
+	return sortCode, nil
 }
 
 func (s *LedgerService) ListParticipants(ctx context.Context) ([]map[string]interface{}, error) {

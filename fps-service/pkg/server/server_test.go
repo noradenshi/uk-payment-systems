@@ -23,8 +23,8 @@ func TestProcessJSONPaymentRequest_WithSortCodes(t *testing.T) {
 		MsgID           string  `json:"msg_id"`
 		SenderBIC       string  `json:"sender_bic"`
 		ReceiverBIC     string  `json:"receiver_bic"`
-		SenderSortCode  string  `json:"sender_sort_code,omitempty"`
-		ReceiverSortCode string `json:"receiver_sort_code,omitempty"`
+		SenderSortCode  string  `json:"sender_sort_code"`
+		ReceiverSortCode string `json:"receiver_sort_code"`
 		Amount          float64 `json:"amount"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -51,8 +51,8 @@ func TestProcessJSONPaymentRequest_WithoutSortCodes(t *testing.T) {
 		MsgID           string  `json:"msg_id"`
 		SenderBIC       string  `json:"sender_bic"`
 		ReceiverBIC     string  `json:"receiver_bic"`
-		SenderSortCode  string  `json:"sender_sort_code,omitempty"`
-		ReceiverSortCode string `json:"receiver_sort_code,omitempty"`
+		SenderSortCode  string  `json:"sender_sort_code"`
+		ReceiverSortCode string `json:"receiver_sort_code"`
 		Amount          float64 `json:"amount"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -75,7 +75,7 @@ func TestHandleRegisterRequest_WithSortCode(t *testing.T) {
 	var req struct {
 		BIC      string  `json:"bic"`
 		Name     string  `json:"name"`
-		SortCode string  `json:"sort_code,omitempty"`
+		SortCode string  `json:"sort_code"`
 		Balance  float64 `json:"balance"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -98,7 +98,7 @@ func TestHandleRegisterRequest_WithoutSortCode(t *testing.T) {
 	var req struct {
 		BIC      string  `json:"bic"`
 		Name     string  `json:"name"`
-		SortCode string  `json:"sort_code,omitempty"`
+		SortCode string  `json:"sort_code"`
 		Balance  float64 `json:"balance"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

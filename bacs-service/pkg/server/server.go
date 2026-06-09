@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bacs-service/pkg/auth"
 	"bacs-service/pkg/events"
 	"bacs-service/pkg/ledger"
 	"bacs-service/pkg/standard18"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,7 +27,7 @@ var reBIC = regexp.MustCompile(`^[A-Z0-9]{8,11}$`)
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("OPTIONS /", handleOptions)
 	// File Submission
-	mux.HandleFunc("POST /v1/payments/bacs/submit", s.handleSubmit)
+	mux.HandleFunc("POST /v1/payments/bacs/submit", s.authMiddleware(s.handleSubmit))
 	mux.HandleFunc("GET /v1/payments/bacs/submit/{id}", s.handleGetSubmission)
 	mux.HandleFunc("GET /v1/payments/bacs/submit", s.handleListSubmissions)
 	mux.HandleFunc("DELETE /v1/payments/bacs/submit/{id}", s.handleDeleteSubmission)
@@ -41,11 +43,11 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	// Participant Management
 	mux.HandleFunc("GET /v1/participants", s.handleListParticipants)
 	mux.HandleFunc("POST /v1/participants/register", s.handleRegisterParticipant)
-	mux.HandleFunc("PATCH /v1/participants/{bic}/status", s.handleUpdateParticipantStatus)
-	mux.HandleFunc("POST /v1/participants/{bic}/block", s.handleBlockParticipant)
-	mux.HandleFunc("GET /v1/participants/{bic}/block", s.handleGetBlockDetails)
-	mux.HandleFunc("DELETE /v1/participants/{bic}/block", s.handleUnblockParticipant)
-	mux.HandleFunc("POST /v1/liquidity/top-up", s.handleTopUp)
+	mux.HandleFunc("PATCH /v1/participants/status", s.authMiddleware(s.handleUpdateParticipantStatus))
+	mux.HandleFunc("POST /v1/participants/block", s.authMiddleware(s.handleBlockParticipant))
+	mux.HandleFunc("GET /v1/participants/block", s.authMiddleware(s.handleGetBlockDetails))
+	mux.HandleFunc("DELETE /v1/participants/block", s.authMiddleware(s.handleUnblockParticipant))
+	mux.HandleFunc("POST /v1/liquidity/top-up", s.authMiddleware(s.handleTopUp))
 
 	// Mandate (AUDDIS) Management
 	mux.HandleFunc("POST /v1/payments/bacs/mandates", s.handleCreateMandate)
@@ -62,21 +64,21 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 
 	// Reports
 	mux.HandleFunc("GET /v1/payments/bacs/reports/{cycleDate}", s.handleCycleReports)
-	mux.HandleFunc("GET /v1/payments/bacs/reports/{cycleDate}/su/{bic}", s.handleCycleReportsForSU)
+	mux.HandleFunc("GET /v1/payments/bacs/reports/{cycleDate}/su", s.authMiddleware(s.handleCycleReportsForSU))
 	mux.HandleFunc("GET /v1/payments/bacs/reports/{cycleDate}/summary", s.handleCycleSummary)
 	mux.HandleFunc("GET /v1/payments/bacs/reports/{cycleDate}/netting", s.handleNettingReport)
-	mux.HandleFunc("GET /v1/payments/bacs/reports/{cycleDate}/netting/{bic}", s.handleNettingReportForBIC)
-	mux.HandleFunc("GET /v1/payments/bacs/su/{bic}/reports", s.handleSUReports)
+	mux.HandleFunc("GET /v1/payments/bacs/su/reports", s.authMiddleware(s.handleSUReports))
 
 	// Events
-	mux.HandleFunc("GET /v1/payments/bacs/incoming/{bic}", s.handleEvents)
+	mux.HandleFunc("GET /v1/payments/bacs/incoming", s.authMiddleware(s.handleEvents))
 
 	// Limits & Controls
 	mux.HandleFunc("GET /v1/payments/bacs/limits", s.handleGetLimits)
-	mux.HandleFunc("PATCH /v1/payments/bacs/limits/{bic}", s.handlePatchLimits)
+	mux.HandleFunc("PATCH /v1/payments/bacs/limits", s.authMiddleware(s.handlePatchLimits))
 
 	// System Metadata
 	mux.HandleFunc("GET /v1/system/schedule", s.handleSystemSchedule)
+	mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload interface{}) {
@@ -99,7 +101,33 @@ func validateBIC(bic string) bool {
 func setCORS(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Idempotency-Key,X-Digital-Signature")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization,Idempotency-Key,X-Digital-Signature")
+}
+
+func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if !strings.HasPrefix(authHeader, "Bearer ") {
+			http.Error(w, `{"error":"missing or invalid Authorization header"}`, http.StatusUnauthorized)
+			return
+		}
+		apiKey := strings.TrimPrefix(authHeader, "Bearer ")
+		if apiKey == "" {
+			http.Error(w, `{"error":"missing API key"}`, http.StatusUnauthorized)
+			return
+		}
+		bic, err := s.Ledger.ValidateAPIKey(r.Context(), apiKey)
+		if err != nil {
+			http.Error(w, `{"error":"invalid API key"}`, http.StatusUnauthorized)
+			return
+		}
+		ctx := context.WithValue(r.Context(), auth.BICKey, bic)
+		next(w, r.WithContext(ctx))
+	}
+}
+
+func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "service": "BACS"})
 }
 
 func handleOptions(w http.ResponseWriter, r *http.Request) {
@@ -226,13 +254,9 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		totalValue += c.Amount
 	}
 
-	suBic := r.URL.Query().Get("su_bic")
-	if suBic == "" && parsed.Header != nil &&
-		(parsed.Header.DestSortCode != "" || parsed.Header.DestAccount != "") {
-		suBic = "BARCGB2L"
-	}
+	suBic := auth.BICFromContext(r.Context())
 	if !validateBIC(suBic) {
-		badRequest(w, "Invalid or missing su_bic")
+		badRequest(w, "Invalid authentication")
 		return
 	}
 
@@ -408,9 +432,9 @@ func (s *Server) handleSettleCycle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
-	bic := r.PathValue("bic")
+	bic := auth.BICFromContext(r.Context())
 	if bic == "" || !validateBIC(bic) {
-		badRequest(w, "Valid BIC required")
+		badRequest(w, "Authentication required")
 		return
 	}
 
@@ -459,6 +483,7 @@ func (s *Server) handleRegisterParticipant(w http.ResponseWriter, r *http.Reques
 		BIC       string  `json:"bic"`
 		Name      string  `json:"name"`
 		Balance   float64 `json:"balance"`
+		SortCode  string  `json:"sort_code"`
 		SUCode    string  `json:"su_code"`
 		IsServiceUser bool `json:"is_service_user"`
 		IsDestUser    bool `json:"is_destination_user"`
@@ -475,25 +500,30 @@ func (s *Server) handleRegisterParticipant(w http.ResponseWriter, r *http.Reques
 		badRequest(w, "BIC must be 8-11 alphanumeric characters")
 		return
 	}
+	if req.SortCode == "" {
+		badRequest(w, "sort_code is required")
+		return
+	}
 	if req.Balance < 0 {
 		badRequest(w, "Initial balance cannot be negative")
 		return
 	}
-	err := s.Ledger.RegisterParticipant(r.Context(), req.BIC, req.Name, req.Balance, req.SUCode, req.IsServiceUser, req.IsDestUser)
+	apiKey, err := s.Ledger.RegisterParticipant(r.Context(), req.BIC, req.Name, req.Balance, req.SortCode, req.SUCode, req.IsServiceUser, req.IsDestUser)
 	if err != nil {
 		log.Printf("Failed to register participant %s: %v", req.BIC, err)
 		http.Error(w, "Failed to register participant", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
-		"bic":   req.BIC,
-		"name":  req.Name,
-		"status": "ACTIVE",
+		"bic":     req.BIC,
+		"api_key": apiKey,
+		"name":    req.Name,
+		"status":  "ACTIVE",
 	})
 }
 
 func (s *Server) handleUpdateParticipantStatus(w http.ResponseWriter, r *http.Request) {
-	bic := r.PathValue("bic")
+	bic := auth.BICFromContext(r.Context())
 	if !validateBIC(bic) {
 		badRequest(w, "Invalid BIC format")
 		return
@@ -520,7 +550,7 @@ func (s *Server) handleUpdateParticipantStatus(w http.ResponseWriter, r *http.Re
 }
 
 func (s *Server) handleBlockParticipant(w http.ResponseWriter, r *http.Request) {
-	bic := r.PathValue("bic")
+	bic := auth.BICFromContext(r.Context())
 	if !validateBIC(bic) {
 		badRequest(w, "Invalid BIC format")
 		return
@@ -544,7 +574,7 @@ func (s *Server) handleBlockParticipant(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleGetBlockDetails(w http.ResponseWriter, r *http.Request) {
-	bic := r.PathValue("bic")
+	bic := auth.BICFromContext(r.Context())
 	if !validateBIC(bic) {
 		badRequest(w, "Invalid BIC format")
 		return
@@ -563,7 +593,7 @@ func (s *Server) handleGetBlockDetails(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUnblockParticipant(w http.ResponseWriter, r *http.Request) {
-	bic := r.PathValue("bic")
+	bic := auth.BICFromContext(r.Context())
 	if !validateBIC(bic) {
 		badRequest(w, "Invalid BIC format")
 		return
@@ -578,28 +608,23 @@ func (s *Server) handleUnblockParticipant(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleTopUp(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		BIC    string  `json:"bic"`
 		Amount float64 `json:"amount"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		badRequest(w, "Invalid request body")
 		return
 	}
-	req.BIC = strings.ToUpper(req.BIC)
-	if !validateBIC(req.BIC) {
-		badRequest(w, "Invalid BIC format")
-		return
-	}
 	if req.Amount <= 0 {
 		badRequest(w, "Amount must be positive")
 		return
 	}
-	if err := s.Ledger.TopUpLiquidity(r.Context(), req.BIC, req.Amount); err != nil {
-		log.Printf("Liquidity top-up failed for %s: %v", req.BIC, err)
+	bic := auth.BICFromContext(r.Context())
+	if err := s.Ledger.TopUpLiquidity(r.Context(), bic, req.Amount); err != nil {
+		log.Printf("Liquidity top-up failed for %s: %v", bic, err)
 		http.Error(w, "Failed to update liquidity", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"bic": req.BIC, "status": "UPDATED"})
+	writeJSON(w, http.StatusOK, map[string]string{"bic": bic, "status": "UPDATED"})
 }
 
 // ── Mandate Handlers ──
@@ -785,7 +810,7 @@ func (s *Server) handleCycleReports(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCycleReportsForSU(w http.ResponseWriter, r *http.Request) {
 	cycleDate := r.PathValue("cycleDate")
-	bic := r.PathValue("bic")
+	bic := auth.BICFromContext(r.Context())
 	if cycleDate == "" || bic == "" {
 		badRequest(w, "Missing cycle date or BIC")
 		return
@@ -820,7 +845,8 @@ func (s *Server) handleNettingReport(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "Missing cycle date")
 		return
 	}
-	report, err := s.Ledger.GetNettingReport(r.Context(), cycleDate, "")
+	bicFilter := strings.ToUpper(r.URL.Query().Get("bic"))
+	report, err := s.Ledger.GetNettingReport(r.Context(), cycleDate, bicFilter)
 	if err != nil {
 		log.Printf("GetNettingReport error: %v", err)
 		http.Error(w, "Netting report not found", http.StatusNotFound)
@@ -829,24 +855,8 @@ func (s *Server) handleNettingReport(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, report)
 }
 
-func (s *Server) handleNettingReportForBIC(w http.ResponseWriter, r *http.Request) {
-	cycleDate := r.PathValue("cycleDate")
-	bic := strings.ToUpper(r.PathValue("bic"))
-	if cycleDate == "" || !validateBIC(bic) {
-		badRequest(w, "Missing cycle date or invalid BIC")
-		return
-	}
-	report, err := s.Ledger.GetNettingReport(r.Context(), cycleDate, bic)
-	if err != nil {
-		log.Printf("GetNettingReportForBIC error: %v", err)
-		http.Error(w, "Netting report not found", http.StatusNotFound)
-		return
-	}
-	writeJSON(w, http.StatusOK, report)
-}
-
 func (s *Server) handleSUReports(w http.ResponseWriter, r *http.Request) {
-	bic := r.PathValue("bic")
+	bic := auth.BICFromContext(r.Context())
 	if !validateBIC(bic) {
 		badRequest(w, "Invalid BIC format")
 		return
@@ -872,7 +882,7 @@ func (s *Server) handleGetLimits(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePatchLimits(w http.ResponseWriter, r *http.Request) {
-	bic := r.PathValue("bic")
+	bic := auth.BICFromContext(r.Context())
 	if !validateBIC(bic) {
 		badRequest(w, "Invalid BIC format")
 		return

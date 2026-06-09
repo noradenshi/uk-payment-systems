@@ -4,6 +4,8 @@ CREATE TABLE participant_profiles (
     bic_code VARCHAR(11) PRIMARY KEY,
     name TEXT NOT NULL,
     currency VARCHAR(3) DEFAULT 'GBP',
+    sort_code VARCHAR(9) NOT NULL,
+    api_key VARCHAR(64) UNIQUE,
     su_code VARCHAR(12),
     is_service_user BOOLEAN DEFAULT FALSE,
     is_destination_user BOOLEAN DEFAULT FALSE,

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"fps-service/pkg/auth"
 	"fps-service/pkg/events"
 	"fps-service/pkg/iso20022"
 	"fps-service/pkg/iso8583"
@@ -35,32 +36,32 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("OPTIONS /", handleOptions)
 	mux.HandleFunc("POST /v1/participants/register", s.handleRegister)
 	mux.HandleFunc("GET /v1/participants", s.handleListParticipants)
-	mux.HandleFunc("PATCH /v1/participants/{bic}/status", s.handleUpdateParticipantStatus)
-	mux.HandleFunc("POST /v1/participants/{bic}/block", s.handleBlockParticipant)
-	mux.HandleFunc("GET /v1/participants/{bic}/block", s.handleGetBlock)
-	mux.HandleFunc("DELETE /v1/participants/{bic}/block", s.handleUnblockParticipant)
-	mux.HandleFunc("GET /v1/participants/{bic}/positions", s.handleGetPosition)
+	mux.HandleFunc("PATCH /v1/participants/status", s.authMiddleware(s.handleUpdateParticipantStatus))
+	mux.HandleFunc("POST /v1/participants/block", s.authMiddleware(s.handleBlockParticipant))
+	mux.HandleFunc("GET /v1/participants/block", s.authMiddleware(s.handleGetBlock))
+	mux.HandleFunc("DELETE /v1/participants/block", s.authMiddleware(s.handleUnblockParticipant))
+	mux.HandleFunc("GET /v1/participants/positions", s.authMiddleware(s.handleGetPosition))
 
-	mux.HandleFunc("POST /v1/payments/fps", s.ProcessPayment)
+	mux.HandleFunc("POST /v1/payments/fps", s.authMiddleware(s.ProcessPayment))
 	mux.HandleFunc("GET /v1/payments/fps", s.handleListPayments)
 	mux.HandleFunc("POST /v1/payments/fps/validate", s.handleValidatePayment)
 	mux.HandleFunc("GET /v1/payments/fps/limits", s.handleGetLimits)
-	mux.HandleFunc("PATCH /v1/payments/fps/limits/{bic}", s.handleUpdateLimit)
+	mux.HandleFunc("PATCH /v1/payments/fps/limits", s.authMiddleware(s.handleUpdateLimit))
 	mux.HandleFunc("POST /v1/payments/fps/gridlock/resolve", s.handleResolveGridlock)
 	mux.HandleFunc("GET /v1/payments/fps/{id}", s.GetPayment)
 	mux.HandleFunc("DELETE /v1/payments/fps/{id}", s.handleCancelPayment)
 
-	mux.HandleFunc("POST /v1/payments/fps/forward-dated", s.handleCreateForwardDated)
+	mux.HandleFunc("POST /v1/payments/fps/forward-dated", s.authMiddleware(s.handleCreateForwardDated))
 	mux.HandleFunc("GET /v1/payments/fps/forward-dated", s.handleListForwardDated)
 	mux.HandleFunc("DELETE /v1/payments/fps/forward-dated/{id}", s.handleCancelForwardDated)
 
-	mux.HandleFunc("POST /v1/payments/fps/standing-orders", s.handleCreateStandingOrder)
+	mux.HandleFunc("POST /v1/payments/fps/standing-orders", s.authMiddleware(s.handleCreateStandingOrder))
 	mux.HandleFunc("GET /v1/payments/fps/standing-orders", s.handleListStandingOrders)
 	mux.HandleFunc("GET /v1/payments/fps/standing-orders/{id}", s.handleGetStandingOrder)
 	mux.HandleFunc("PATCH /v1/payments/fps/standing-orders/{id}", s.handleUpdateStandingOrder)
 	mux.HandleFunc("DELETE /v1/payments/fps/standing-orders/{id}", s.handleCancelStandingOrder)
 
-	mux.HandleFunc("POST /v1/payments/fps/bulk", s.handleCreateBulkSubmission)
+	mux.HandleFunc("POST /v1/payments/fps/bulk", s.authMiddleware(s.handleCreateBulkSubmission))
 	mux.HandleFunc("GET /v1/payments/fps/bulk/{id}", s.handleGetBulkSubmission)
 	mux.HandleFunc("GET /v1/payments/fps/bulk", s.handleListBulkSubmissions)
 
@@ -68,15 +69,17 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/settlement/dns/close", s.handleCloseDNSCycle)
 	mux.HandleFunc("GET /v1/settlement/dns/history", s.handleGetDNSHistory)
 
-	mux.HandleFunc("POST /v1/liquidity/top-up", s.handleTopUp)
-	mux.HandleFunc("GET /v1/liquidity/prefunded/{bic}", s.handleGetPrefunded)
+	mux.HandleFunc("POST /v1/liquidity/top-up", s.authMiddleware(s.handleTopUp))
+	mux.HandleFunc("GET /v1/liquidity/prefunded", s.authMiddleware(s.handleGetPrefunded))
 
-	mux.HandleFunc("GET /v1/payments/fps/incoming/{bic}", s.handleEvents)
+	mux.HandleFunc("GET /v1/payments/fps/incoming", s.authMiddleware(s.handleEvents))
 
 	mux.HandleFunc("GET /v1/system/schedule", s.handleSystemSchedule)
 
-	mux.HandleFunc("POST /v1/payments/fps/iso8583", s.handleISO8583Payment)
+	mux.HandleFunc("POST /v1/payments/fps/iso8583", s.authMiddleware(s.handleISO8583Payment))
 	mux.HandleFunc("GET /v1/payments/fps/iso8583/decode", s.handleISO8583Decode)
+
+	mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload interface{}) {
@@ -103,13 +106,39 @@ func validateBIC(bic string) bool {
 func setCORS(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Idempotency-Key,X-Digital-Signature")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization,Idempotency-Key,X-Digital-Signature")
+}
+
+func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if !strings.HasPrefix(authHeader, "Bearer ") {
+			http.Error(w, `{"error":"missing or invalid Authorization header"}`, http.StatusUnauthorized)
+			return
+		}
+		apiKey := strings.TrimPrefix(authHeader, "Bearer ")
+		if apiKey == "" {
+			http.Error(w, `{"error":"missing API key"}`, http.StatusUnauthorized)
+			return
+		}
+		bic, err := s.Ledger.ValidateAPIKey(r.Context(), apiKey)
+		if err != nil {
+			http.Error(w, `{"error":"invalid API key"}`, http.StatusUnauthorized)
+			return
+		}
+		ctx := context.WithValue(r.Context(), auth.BICKey, bic)
+		next(w, r.WithContext(ctx))
+	}
+}
+
+func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "service": "FPS"})
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
-	bic := r.PathValue("bic")
+	bic := auth.BICFromContext(r.Context())
 	if bic == "" || !validateBIC(bic) {
-		badRequest(w, "Valid BIC required")
+		badRequest(w, "Authentication required")
 		return
 	}
 
@@ -242,7 +271,7 @@ func (s *Server) handleListParticipants(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleUpdateParticipantStatus(w http.ResponseWriter, r *http.Request) {
-	bic := r.PathValue("bic")
+	bic := auth.BICFromContext(r.Context())
 	if !validateBIC(bic) {
 		badRequest(w, "Invalid BIC format")
 		return
@@ -269,7 +298,7 @@ func (s *Server) handleUpdateParticipantStatus(w http.ResponseWriter, r *http.Re
 }
 
 func (s *Server) handleGetBlock(w http.ResponseWriter, r *http.Request) {
-	bic := r.PathValue("bic")
+	bic := auth.BICFromContext(r.Context())
 	if !validateBIC(bic) {
 		badRequest(w, "Invalid BIC format")
 		return
@@ -291,7 +320,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		BIC             string  `json:"bic"`
 		Name            string  `json:"name"`
-		SortCode        string  `json:"sort_code,omitempty"`
+		SortCode        string  `json:"sort_code"`
 		Balance         float64 `json:"balance"`
 		ParticipantType string  `json:"participant_type"`
 		SponsorBic      string  `json:"sponsor_bic"`
@@ -308,6 +337,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "BIC must be 8-11 alphanumeric characters")
 		return
 	}
+	if req.SortCode == "" {
+		badRequest(w, "sort_code is required")
+		return
+	}
 	if req.Balance < 0 {
 		badRequest(w, "Initial balance cannot be negative")
 		return
@@ -319,17 +352,21 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "participant_type must be DIRECT or INDIRECT")
 		return
 	}
-	err := s.Ledger.RegisterParticipant(r.Context(), req.BIC, req.Name, req.SortCode, req.Balance, req.ParticipantType, req.SponsorBic)
+	apiKey, err := s.Ledger.RegisterParticipant(r.Context(), req.BIC, req.Name, req.SortCode, req.Balance, req.ParticipantType, req.SponsorBic)
 	if err != nil {
 		log.Printf("Failed to register participant %s: %v", req.BIC, err)
 		http.Error(w, "Failed to create participant", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]string{"bic": req.BIC, "status": "ACTIVE"})
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"bic":     req.BIC,
+		"api_key": apiKey,
+		"status":  "ACTIVE",
+	})
 }
 
 func (s *Server) handleGetPosition(w http.ResponseWriter, r *http.Request) {
-	bic := r.PathValue("bic")
+	bic := auth.BICFromContext(r.Context())
 	if !validateBIC(bic) {
 		badRequest(w, "Invalid BIC format")
 		return
@@ -345,32 +382,28 @@ func (s *Server) handleGetPosition(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleTopUp(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		BIC    string  `json:"bic"`
 		Amount float64 `json:"amount"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		badRequest(w, "Invalid request body")
 		return
 	}
-	if !validateBIC(req.BIC) {
-		badRequest(w, "Invalid BIC format")
-		return
-	}
 	if req.Amount <= 0 {
 		badRequest(w, "Amount must be positive")
 		return
 	}
-	err := s.Ledger.TopUpLiquidity(r.Context(), req.BIC, req.Amount)
+	bic := auth.BICFromContext(r.Context())
+	err := s.Ledger.TopUpLiquidity(r.Context(), bic, req.Amount)
 	if err != nil {
-		log.Printf("Liquidity top-up failed for %s: %v", req.BIC, err)
+		log.Printf("Liquidity top-up failed for %s: %v", bic, err)
 		http.Error(w, "Failed to update liquidity", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"bic": req.BIC, "status": "UPDATED"})
+	writeJSON(w, http.StatusOK, map[string]string{"bic": bic, "status": "UPDATED"})
 }
 
 func (s *Server) handleBlockParticipant(w http.ResponseWriter, r *http.Request) {
-	bic := r.PathValue("bic")
+	bic := auth.BICFromContext(r.Context())
 	if !validateBIC(bic) {
 		badRequest(w, "Invalid BIC format")
 		return
@@ -395,7 +428,7 @@ func (s *Server) handleBlockParticipant(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleUnblockParticipant(w http.ResponseWriter, r *http.Request) {
-	bic := r.PathValue("bic")
+	bic := auth.BICFromContext(r.Context())
 	if !validateBIC(bic) {
 		badRequest(w, "Invalid BIC format")
 		return
@@ -462,8 +495,20 @@ func (s *Server) processXMLPayment(w http.ResponseWriter, r *http.Request) {
 		s.sendXMLReject(w, "XMLI", "INVALID-FIELDS")
 		return
 	}
+
+	if msg.SenderSortCode == "" || msg.DestSortCode == "" {
+		s.sendXMLReject(w, "XMLI", "SORT-CODE-MISSING")
+		return
+	}
+
 	if len(msg.MsgId) > 35 {
 		s.sendXMLReject(w, "XMLI", "MSGID-TOO-LONG")
+		return
+	}
+
+	authBic := auth.BICFromContext(r.Context())
+	if authBic != "" && msg.Sender != authBic {
+		s.sendXMLReject(w, "XMLI", "SENDER-MISMATCH")
 		return
 	}
 
@@ -512,22 +557,24 @@ func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		MsgID           string  `json:"msg_id"`
 		EndToEndID      string  `json:"end_to_end_id"`
-		SenderBIC       string  `json:"sender_bic"`
 		ReceiverBIC     string  `json:"receiver_bic"`
-		SenderSortCode  string  `json:"sender_sort_code,omitempty"`
-		ReceiverSortCode string `json:"receiver_sort_code,omitempty"`
+		ReceiverSortCode string `json:"receiver_sort_code"`
 		Amount          float64 `json:"amount"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		badRequest(w, "Invalid request body")
 		return
 	}
-	if req.MsgID == "" || req.SenderBIC == "" || req.ReceiverBIC == "" || req.Amount <= 0 {
-		badRequest(w, "msg_id, sender_bic, receiver_bic, and positive amount are required")
+	if req.MsgID == "" || req.ReceiverBIC == "" || req.Amount <= 0 {
+		badRequest(w, "msg_id, receiver_bic, and positive amount are required")
 		return
 	}
-	if !validateBIC(req.SenderBIC) || !validateBIC(req.ReceiverBIC) {
+	if !validateBIC(req.ReceiverBIC) {
 		badRequest(w, "Invalid BIC format")
+		return
+	}
+	if req.ReceiverSortCode == "" {
+		badRequest(w, "receiver_sort_code is required")
 		return
 	}
 	if len(req.MsgID) > 35 {
@@ -535,7 +582,20 @@ func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := s.Ledger.SettleSIP(r.Context(), req.MsgID, req.SenderBIC, req.ReceiverBIC, req.Amount, req.EndToEndID, req.SenderSortCode, req.ReceiverSortCode)
+	senderBic := auth.BICFromContext(r.Context())
+	if !validateBIC(senderBic) {
+		badRequest(w, "Invalid authentication")
+		return
+	}
+
+	senderSortCode, err := s.Ledger.GetSortCode(r.Context(), senderBic)
+	if err != nil {
+		log.Printf("Failed to lookup sender sort code for %s: %v", senderBic, err)
+		http.Error(w, "Sender not found", http.StatusInternalServerError)
+		return
+	}
+
+	res, err := s.Ledger.SettleSIP(r.Context(), req.MsgID, senderBic, req.ReceiverBIC, req.Amount, req.EndToEndID, senderSortCode, req.ReceiverSortCode)
 	if err != nil {
 		log.Printf("[CRITICAL] Ledger system failure for MsgId %s: %v", req.MsgID, err)
 		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
@@ -558,7 +618,7 @@ func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 			Type: "payment.received",
 			Data: map[string]interface{}{
 				"msg_id":     req.MsgID,
-				"sender":     req.SenderBIC,
+				"sender":     senderBic,
 				"receiver":   req.ReceiverBIC,
 				"amount":     req.Amount,
 				"status":     "SETTLED",
@@ -592,6 +652,12 @@ func (s *Server) processISO8583Payment(w http.ResponseWriter, r *http.Request) {
 
 	if msg.DE32_Acquirer == "" || msg.DE100_Receiver == "" || msg.DE4_Amount <= 0 {
 		badRequest(w, "Missing DE32 (acquirer), DE100 (receiver), or DE4 (amount)")
+		return
+	}
+
+	authBic := auth.BICFromContext(r.Context())
+	if authBic != "" && msg.DE32_Acquirer != authBic {
+		badRequest(w, "Sender BIC mismatch with authentication")
 		return
 	}
 
@@ -682,7 +748,7 @@ func (s *Server) handleGetLimits(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdateLimit(w http.ResponseWriter, r *http.Request) {
-	bic := r.PathValue("bic")
+	bic := auth.BICFromContext(r.Context())
 	if !validateBIC(bic) {
 		badRequest(w, "Invalid BIC format")
 		return
@@ -739,7 +805,6 @@ func (s *Server) handleCancelPayment(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCreateForwardDated(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		MsgID       string  `json:"msg_id"`
-		SenderBIC   string  `json:"sender_bic"`
 		ReceiverBIC string  `json:"receiver_bic"`
 		Amount      float64 `json:"amount"`
 		ExecDate    string  `json:"execution_date"`
@@ -748,16 +813,17 @@ func (s *Server) handleCreateForwardDated(w http.ResponseWriter, r *http.Request
 		badRequest(w, "Invalid request body")
 		return
 	}
-	if req.MsgID == "" || !validateBIC(req.SenderBIC) || !validateBIC(req.ReceiverBIC) || req.Amount <= 0 || req.ExecDate == "" {
+	if req.MsgID == "" || !validateBIC(req.ReceiverBIC) || req.Amount <= 0 || req.ExecDate == "" {
 		badRequest(w, "Missing required fields")
 		return
 	}
+	senderBic := auth.BICFromContext(r.Context())
 	execDate, err := time.Parse("2006-01-02", req.ExecDate)
 	if err != nil {
 		badRequest(w, "Invalid execution_date format, use YYYY-MM-DD")
 		return
 	}
-	if err := s.Ledger.CreateForwardDated(r.Context(), req.MsgID, req.SenderBIC, req.ReceiverBIC, req.Amount, execDate); err != nil {
+	if err := s.Ledger.CreateForwardDated(r.Context(), req.MsgID, senderBic, req.ReceiverBIC, req.Amount, execDate); err != nil {
 		log.Printf("Failed to create forward dated: %v", err)
 		http.Error(w, "Failed to create forward dated payment", http.StatusInternalServerError)
 		return
@@ -794,22 +860,22 @@ func (s *Server) handleCancelForwardDated(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleCreateStandingOrder(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Reference  string  `json:"reference"`
-		SenderBIC  string  `json:"sender_bic"`
-		ReceiverBIC string `json:"receiver_bic"`
-		Amount     float64 `json:"amount"`
-		Frequency  string  `json:"frequency"`
-		NextDate   string  `json:"next_date"`
-		EndDate    string  `json:"end_date"`
+		Reference   string  `json:"reference"`
+		ReceiverBIC string  `json:"receiver_bic"`
+		Amount      float64 `json:"amount"`
+		Frequency   string  `json:"frequency"`
+		NextDate    string  `json:"next_date"`
+		EndDate     string  `json:"end_date"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		badRequest(w, "Invalid request body")
 		return
 	}
-	if req.Reference == "" || !validateBIC(req.SenderBIC) || !validateBIC(req.ReceiverBIC) || req.Amount <= 0 || req.Frequency == "" || req.NextDate == "" {
+	if req.Reference == "" || !validateBIC(req.ReceiverBIC) || req.Amount <= 0 || req.Frequency == "" || req.NextDate == "" {
 		badRequest(w, "Missing required fields")
 		return
 	}
+	senderBic := auth.BICFromContext(r.Context())
 	nextDate, err := time.Parse("2006-01-02", req.NextDate)
 	if err != nil {
 		badRequest(w, "Invalid next_date format")
@@ -823,7 +889,7 @@ func (s *Server) handleCreateStandingOrder(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
-	if err := s.Ledger.CreateStandingOrder(r.Context(), req.Reference, req.SenderBIC, req.ReceiverBIC, req.Amount, req.Frequency, nextDate, endDate); err != nil {
+	if err := s.Ledger.CreateStandingOrder(r.Context(), req.Reference, senderBic, req.ReceiverBIC, req.Amount, req.Frequency, nextDate, endDate); err != nil {
 		log.Printf("Failed to create standing order: %v", err)
 		http.Error(w, "Failed to create standing order", http.StatusInternalServerError)
 		return
@@ -909,7 +975,6 @@ func (s *Server) handleCancelStandingOrder(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleCreateBulkSubmission(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Filename   string  `json:"filename"`
-		SenderBIC  string  `json:"sender_bic"`
 		TotalItems int     `json:"total_items"`
 		TotalValue float64 `json:"total_value"`
 	}
@@ -917,11 +982,12 @@ func (s *Server) handleCreateBulkSubmission(w http.ResponseWriter, r *http.Reque
 		badRequest(w, "Invalid request body")
 		return
 	}
-	if req.Filename == "" || !validateBIC(req.SenderBIC) || req.TotalItems <= 0 || req.TotalValue <= 0 {
+	if req.Filename == "" || req.TotalItems <= 0 || req.TotalValue <= 0 {
 		badRequest(w, "Invalid fields")
 		return
 	}
-	id, err := s.Ledger.CreateBulkSubmission(r.Context(), req.Filename, req.SenderBIC, req.TotalItems, req.TotalValue)
+	senderBic := auth.BICFromContext(r.Context())
+	id, err := s.Ledger.CreateBulkSubmission(r.Context(), req.Filename, senderBic, req.TotalItems, req.TotalValue)
 	if err != nil {
 		http.Error(w, "Failed to create bulk submission", http.StatusInternalServerError)
 		return
@@ -980,7 +1046,7 @@ func (s *Server) handleGetDNSHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetPrefunded(w http.ResponseWriter, r *http.Request) {
-	bic := r.PathValue("bic")
+	bic := auth.BICFromContext(r.Context())
 	if !validateBIC(bic) {
 		badRequest(w, "Invalid BIC format")
 		return
