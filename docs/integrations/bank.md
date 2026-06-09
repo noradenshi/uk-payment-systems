@@ -97,7 +97,7 @@ calling that service (e.g. `ukps_chaps_key_barclays` for CHAPS on port 8080).
 `sort_code` is required for all three services. Scheme-specific extras:
 
 | Service | Additional Fields |
-|---|---|---|
+|---|---|
 | CHAPS | `sort_code` |
 | FPS | `sort_code`, `participant_type` (`DIRECT`/`INDIRECT`), `sponsor_bic` |
 | BACS | `sort_code`, `su_code`, `is_service_user`, `is_destination_user` |
@@ -363,8 +363,8 @@ In demo mode, cycle durations and tick intervals are compressed according to
 
 ### Docker Compose
 
-Each service has a production `compose.yml`. The root `compose.yml` orchestrates
-all three services together.
+Each service has a `Dockerfile`.
+The root `compose.yml` orchestrates all three services together.
 
 ```yaml
 services:
@@ -393,7 +393,7 @@ place the container on the same Docker network as the target service.
 | Variable | Services | Default |
 | :--- | :--- | :--- |
 | `DATABASE_URL` | All | Scheme-specific postgres connection string |
-| `ISO8583_PORT` | FPS | `:7421` |
+| `ISO8583_PORT` | FPS | `7421` |
 | `PORT` | All | `8080`/`8081`/`8082` |
 
 ### Configuration

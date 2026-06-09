@@ -102,7 +102,7 @@ CHAPS na porcie 8080).
 specyficzne dla schematu:
 
 | Usługa | Dodatkowe pola |
-|---|---|---|
+|---|---|
 | CHAPS | `sort_code` |
 | FPS | `sort_code`, `participant_type` (`DIRECT`/`INDIRECT`), `sponsor_bic` |
 | BACS | `sort_code`, `su_code`, `is_service_user`, `is_destination_user` |
@@ -376,8 +376,8 @@ z `demo_session_minutes` w `config/sessions.json`.
 
 ### Docker Compose
 
-Każda usługa ma produkcyjny `compose.yml`. Główny `compose.yml` w katalogu
-głównym orkiestruje wszystkie trzy usługi razem.
+Każda usługa ma własny `Dockerfile`.
+`compose.yml` w katalogu głównym orkiestruje wszystkie trzy usługi razem.
 
 ```yaml
 services:
@@ -406,7 +406,7 @@ schematu, umieść kontener w tej samej sieci Docker co docelowa usługa.
 | Zmienna | Usługi | Domyślnie |
 | :--- | :--- | :--- |
 | `DATABASE_URL` | Wszystkie | Ciąg połączenia Postgres specyficzny dla schematu |
-| `ISO8583_PORT` | FPS | `:7421` |
+| `ISO8583_PORT` | FPS | `7421` |
 | `PORT` | Wszystkie | `8080`/`8081`/`8082` |
 
 ### Konfiguracja

@@ -20,7 +20,7 @@ Three services mimic the UK interbank payment network. All three services have f
 | Service | Port | DB Port | DB Name | Other |
 | :--- | :--- | :--- | :--- | :--- |
 | CHAPS | 8080 | 5432 | `chaps_ledger` | — |
-| FPS | 8081 | 5433 | `fps_ledger` | TCP `:7421` (ISO 8583 socket) |
+| FPS | 8081 | 5433 | `fps_ledger` | TCP `7421` (ISO 8583 socket) |
 | BACS | 8082 | 5434 | `bacs_ledger` | — |
 
 ---
