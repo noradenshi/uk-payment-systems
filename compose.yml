@@ -94,21 +94,6 @@ services:
       bacs-db:
         condition: service_healthy
 
-  # central-bank-app:
-  #   build: ./central-bank-service
-  #   container_name: central_bank_server
-  #   platform: linux/amd64
-  #   ports:
-  #     - "8090:8090"
-  #   environment:
-  #     CHAPS_URL: "http://chaps-app:8080"
-  #     FPS_URL: "http://fps-app:8081"
-  #     BACS_URL: "http://bacs-app:8082"
-  #   depends_on:
-  #     - chaps-app
-  #     - fps-app
-  #     - bacs-app
-
 networks:
   chaps_klik:
     name: chaps_klik
