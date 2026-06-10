@@ -7,17 +7,19 @@ import (
 )
 
 type Message0200 struct {
-	MTI               string
-	DE2_PAN           string
-	DE3_ProcCode      string
-	DE4_Amount        int64
-	DE7_TransDateTime string
-	DE11_Trace        int
-	DE32_Acquirer     string
-	DE37_RefNum       string
-	DE41_TerminalID   string
-	DE49_Currency     string
-	DE100_Receiver    string
+	MTI                 string
+	DE2_PAN             string
+	DE3_ProcCode        string
+	DE4_Amount          int64
+	DE7_TransDateTime   string
+	DE11_Trace          int
+	DE32_Acquirer       string
+	DE37_RefNum         string
+	DE41_TerminalID     string
+	DE49_Currency       string
+	DE100_Receiver      string
+	DE102_SourceAccount string
+	DE103_DestAccount   string
 }
 
 func parseNumeric(raw []byte, length int) string {
@@ -99,6 +101,8 @@ var fieldMap = []fieldDef{
 	{41, func(raw []byte, off *int) (interface{}, error) { return parseAN(8)(raw, off) }, func(m *Message0200, v interface{}) { m.DE41_TerminalID, _ = v.(string) }},
 	{49, func(raw []byte, off *int) (interface{}, error) { return parseAN(3)(raw, off) }, func(m *Message0200, v interface{}) { m.DE49_Currency, _ = v.(string) }},
 	{100, func(raw []byte, off *int) (interface{}, error) { return parseLLVAR(raw, off) }, func(m *Message0200, v interface{}) { m.DE100_Receiver, _ = v.(string) }},
+	{102, func(raw []byte, off *int) (interface{}, error) { return parseLLVAR(raw, off) }, func(m *Message0200, v interface{}) { m.DE102_SourceAccount, _ = v.(string) }},
+	{103, func(raw []byte, off *int) (interface{}, error) { return parseLLVAR(raw, off) }, func(m *Message0200, v interface{}) { m.DE103_DestAccount, _ = v.(string) }},
 }
 
 var fieldLookup = map[int]fieldDef{}
@@ -165,12 +169,14 @@ func ParseISO8583(raw []byte) (*Message0200, error) {
 }
 
 type Message0210 struct {
-	MTI           string
-	DE39_RespCode string
-	DE4_Amount    int64
-	DE11_Trace    int
-	DE32_Acquirer string
-	DE100_Receiver string
+	MTI                 string
+	DE39_RespCode       string
+	DE4_Amount          int64
+	DE11_Trace          int
+	DE32_Acquirer       string
+	DE100_Receiver      string
+	DE102_SourceAccount string
+	DE103_DestAccount   string
 }
 
 func (m *Message0210) Encode() []byte {
@@ -192,6 +198,8 @@ func (m *Message0210) Encode() []byte {
 	setBit(32)
 	setBit(39)
 	setBit(100)
+	setBit(102)
+	setBit(103)
 
 	primBytes := make([]byte, 8)
 	binary.BigEndian.PutUint64(primBytes, primaryBmp)
@@ -216,6 +224,12 @@ func (m *Message0210) Encode() []byte {
 
 	buf = append(buf, byte(len(m.DE100_Receiver)))
 	buf = append(buf, []byte(m.DE100_Receiver)...)
+
+	buf = append(buf, byte(len(m.DE102_SourceAccount)))
+	buf = append(buf, []byte(m.DE102_SourceAccount)...)
+
+	buf = append(buf, byte(len(m.DE103_DestAccount)))
+	buf = append(buf, []byte(m.DE103_DestAccount)...)
 
 	return buf
 }

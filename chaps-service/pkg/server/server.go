@@ -527,12 +527,14 @@ func (s *Server) processXMLPayment(w http.ResponseWriter, r *http.Request) {
 		s.Events.Publish(msg.DestBIC, events.Event{
 			Type: "payment.received",
 			Data: map[string]interface{}{
-				"msg_id":     msg.MsgId,
-				"sender":     msg.Sender,
-				"receiver":   msg.DestBIC,
-				"amount":     msg.Amount,
-				"status":     "SETTLED",
-				"scheme":     "CHAPS",
+				"msg_id":           msg.MsgId,
+				"sender":           msg.Sender,
+				"receiver":         msg.DestBIC,
+				"receiver_sort":    msg.DestSortCode,
+				"receiver_account": msg.DestAccount,
+				"amount":           msg.Amount,
+				"status":           "SETTLED",
+				"scheme":           "CHAPS",
 			},
 		})
 	} else {
@@ -548,11 +550,12 @@ func (s *Server) processXMLPayment(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		MsgID           string  `json:"msg_id"`
-		EndToEndID      string  `json:"end_to_end_id"`
-		ReceiverBIC     string  `json:"receiver_bic"`
-		ReceiverSortCode string `json:"receiver_sort_code"`
-		Amount          float64 `json:"amount"`
+		MsgID            string  `json:"msg_id"`
+		EndToEndID       string  `json:"end_to_end_id"`
+		ReceiverBIC      string  `json:"receiver_bic"`
+		ReceiverSortCode string  `json:"receiver_sort_code"`
+		ReceiverAccount  string  `json:"receiver_account"`
+		Amount           float64 `json:"amount"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		badRequest(w, "Invalid request body")
@@ -610,12 +613,14 @@ func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 		s.Events.Publish(req.ReceiverBIC, events.Event{
 			Type: "payment.received",
 			Data: map[string]interface{}{
-				"msg_id":     req.MsgID,
-				"sender":     senderBic,
-				"receiver":   req.ReceiverBIC,
-				"amount":     req.Amount,
-				"status":     "SETTLED",
-				"scheme":     "CHAPS",
+				"msg_id":           req.MsgID,
+				"sender":           senderBic,
+				"receiver":         req.ReceiverBIC,
+				"receiver_sort":    req.ReceiverSortCode,
+				"receiver_account": req.ReceiverAccount,
+				"amount":           req.Amount,
+				"status":           "SETTLED",
+				"scheme":           "CHAPS",
 			},
 		})
 	}
@@ -779,10 +784,10 @@ func (s *Server) handleSystemSchedule(w http.ResponseWriter, r *http.Request) {
 		interbankCutoff = "18:00"
 	}
 	writeJSON(w, http.StatusOK, map[string]string{
-		"date":              time.Now().Format("2006-01-02"),
-		"opening_time":      opening,
-		"interbank_cutoff":  interbankCutoff,
-		"timezone":          "Europe/London",
+		"date":                 time.Now().Format("2006-01-02"),
+		"opening_time":         opening,
+		"interbank_cutoff":     interbankCutoff,
+		"timezone":             "Europe/London",
 		"demo_session_minutes": fmt.Sprint(cfg["demo_session_minutes"]),
 	})
 }
