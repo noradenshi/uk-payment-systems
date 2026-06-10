@@ -607,7 +607,7 @@ func (s *LedgerService) ExecuteForwardDated(ctx context.Context) error {
 			log.Printf("ExecuteForwardDated scan: %v", err)
 			continue
 		}
-		result, err := s.SettleSIP(ctx, msgID, sender, receiver, amount, msgID, "", "")
+		result, err := s.SettleSIP(ctx, msgID, sender, receiver, amount, msgID, "", "", "", "")
 		if err != nil {
 			log.Printf("ExecuteForwardDated settle %s: %v", msgID, err)
 			s.Pool.Exec(ctx, "UPDATE fps_forward_dated SET status='FAILED' WHERE id=$1::uuid", id)
@@ -639,7 +639,7 @@ func (s *LedgerService) ExecuteStandingOrders(ctx context.Context) error {
 			continue
 		}
 		msgID := fmt.Sprintf("STO-%s-%s", ref, nextDate.Format("20060102"))
-		result, err := s.SettleSIP(ctx, msgID, sender, receiver, amount, msgID, "", "")
+		result, err := s.SettleSIP(ctx, msgID, sender, receiver, amount, msgID, "", "", "", "")
 		if err != nil {
 			log.Printf("ExecuteStandingOrders settle %s: %v", msgID, err)
 			continue

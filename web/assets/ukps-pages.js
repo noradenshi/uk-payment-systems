@@ -337,6 +337,98 @@ function renderParticipantOptions(selectedBic) {
   });
 }
 
+function liquidityAlertForParticipant(participant) {
+  const balance = Number(participant?.balance || 0);
+  const limit = Number(participant?.overdraft_limit || 0);
+  if (limit <= 0) return null;
+
+  const available = balance + limit;
+  const base = {
+    bic: participant.bic,
+    name: participant.name || "",
+    balance,
+    limit,
+    available,
+  };
+
+  if (available <= 0) {
+    return {
+      ...base,
+      level: "critical",
+      title: "Limit dobity",
+      message: `${participant.bic} wykorzystał limit zadłużenia. Dostępna płynność: ${money.format(available)}.`,
+    };
+  }
+
+  if (available <= limit * 0.1) {
+    return {
+      ...base,
+      level: "warning",
+      title: "Blisko limitu",
+      message: `${participant.bic} ma mniej niż 10% limitu. Dostępna płynność: ${money.format(available)}.`,
+    };
+  }
+
+  return null;
+}
+
+function getLiquidityAlerts(participants = state.participants) {
+  return participants
+    .map(liquidityAlertForParticipant)
+    .filter(Boolean)
+    .sort((a, b) => a.available - b.available);
+}
+
+function ensureAlertPanel() {
+  if ($("liquidityAlerts")) return;
+  const metrics = document.querySelector(".metrics-grid");
+  if (!metrics) return;
+  metrics.insertAdjacentHTML("afterend", `
+    <section class="alert-panel" id="liquidityAlerts">
+      <div class="panel-head">
+        <div>
+          <p class="section-label">Alerty limitów</p>
+          <h2>Banki przy limicie płynności</h2>
+        </div>
+        <span id="alertCount" class="alert-count">0</span>
+      </div>
+      <div id="alertList" class="alert-list"></div>
+    </section>
+  `);
+}
+
+function renderLiquidityAlerts(alerts) {
+  ensureAlertPanel();
+  const panel = $("liquidityAlerts");
+  const list = $("alertList");
+  if (!panel || !list) return;
+
+  const items = Array.isArray(alerts) ? alerts : [];
+  const criticalCount = items.filter((alert) => alert.level === "critical").length;
+  panel.classList.toggle("has-alerts", items.length > 0);
+  panel.classList.toggle("has-critical", criticalCount > 0);
+  setText("alertCount", String(items.length));
+
+  if (items.length === 0) {
+    list.innerHTML = `<p class="empty-state">Brak banków przy limicie.</p>`;
+    return;
+  }
+
+  list.innerHTML = items
+    .map((alert) => `<article class="alert-item ${alert.level}">
+      <div>
+        <strong>${escapeHTML(alert.title)}</strong>
+        <span>${escapeHTML(alert.message)}</span>
+      </div>
+      <dl>
+        <div><dt>BIC</dt><dd>${escapeHTML(alert.bic)}</dd></div>
+        <div><dt>Saldo</dt><dd>${money.format(alert.balance)}</dd></div>
+        <div><dt>Limit</dt><dd>${money.format(alert.limit)}</dd></div>
+      </dl>
+    </article>`)
+    .join("");
+}
+
 function renderParticipants() {
   const body = $("participantsBody");
   if (!body) return;
@@ -344,7 +436,7 @@ function renderParticipants() {
     .map((p) => {
       const balance = Number(p.balance || 0);
       const limit = Number(p.overdraft_limit || 0);
-      const emergency = balance < -limit;
+      const emergency = limit > 0 && balance <= -limit;
       return `<tr ${emergency ? 'class="notice bad"' : ""}>
         <td>${p.bic}</td>
         <td>${p.name || ""}</td>
@@ -421,6 +513,7 @@ async function refreshOperator() {
     setText("metricSettled", String(settled));
     setText("metricQueued", String(queued));
     setText("metricRejected", String(rejected));
+    renderLiquidityAlerts(getLiquidityAlerts());
     setHTML("systemLimits", renderInfoList(limits, "Brak danych limitów."));
     setHTML("systemSchedule", renderInfoList(schedule, "Brak danych harmonogramu."));
     renderCycleOverview(state.cycles);
@@ -452,6 +545,7 @@ async function refreshBank() {
     setText("metricLimit", limits?.single_payment_limit != null ? money.format(Number(limits.single_payment_limit)) : money.format(overdraft));
     setText("metricBankPayments", String(bankPayments.length));
     setHTML("bankDetails", renderBankDetails(participant, position, limits));
+    renderLiquidityAlerts(getLiquidityAlerts(participant ? [participant] : []));
     renderPayments(bankPayments);
     renderParticipantOptions(bic);
     if ($("senderBic")) $("senderBic").value = bic;
