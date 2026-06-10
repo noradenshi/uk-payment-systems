@@ -539,8 +539,10 @@ func (s *LedgerService) ListPayments(ctx context.Context, statusFilter string, l
 	if statusFilter != "" {
 		q += " WHERE status = $1"
 		args = append(args, statusFilter)
+		q += " ORDER BY created_at DESC LIMIT $2"
+	} else {
+		q += " ORDER BY created_at DESC LIMIT $1"
 	}
-	q += " ORDER BY created_at DESC LIMIT $2"
 	args = append(args, limit)
 	rows, err := s.Pool.Query(ctx, q, args...)
 	if err != nil {
