@@ -71,6 +71,21 @@ func (s *LedgerService) GetSortCode(ctx context.Context, bic string) (string, er
 	return sortCode, nil
 }
 
+func (s *LedgerService) GetPosition(ctx context.Context, bic string) (map[string]interface{}, error) {
+	var balance float64
+	var overdraft float64
+	err := s.Pool.QueryRow(ctx, `
+		SELECT COALESCE(l.balance, 0), COALESCE(st.overdraft_limit, 0)
+		FROM participant_profiles p
+		LEFT JOIN participant_liquidity l ON l.bic_code = p.bic_code
+		LEFT JOIN participant_statuses st ON st.bic_code = p.bic_code
+		WHERE p.bic_code = $1`, bic).Scan(&balance, &overdraft)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"bic": bic, "balance": balance, "available": balance + overdraft, "earmarked": 0}, nil
+}
+
 func (s *LedgerService) ListParticipants(ctx context.Context) ([]map[string]interface{}, error) {
 	rows, err := s.Pool.Query(ctx, `
 		SELECT p.bic_code, p.name, p.su_code, p.sort_code, p.is_service_user, p.is_destination_user,

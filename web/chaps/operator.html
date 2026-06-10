@@ -46,21 +46,46 @@
       </form>
 
       <article class="panel">
-        <div class="panel-head"><div><p class="section-label">Kontrola</p><h2>Status, płynność i limity</h2></div></div>
-        <div class="form-grid">
-          <label>Bank <select id="opsBic" data-participant-options></select></label>
-          <label>Status <select id="opsStatus"><option>ACTIVE</option><option>SUSPENDED</option><option>DISABLED</option></select></label>
-          <label>Powód <input id="opsReason" value="OPERATOR_CONTROL" /></label>
-          <label>Zasilenie <input id="topUpAmount" type="number" value="100000" /></label>
-          <label>Limit zadłużenia <input id="overdraftLimit" type="number" value="30000000" /></label>
-        </div>
-        <div class="button-row">
-          <button id="setStatus" class="secondary-button" type="button">Ustaw status</button>
-          <button id="blockParticipant" class="danger-button" type="button">Zablokuj</button>
-          <button id="unblockParticipant" class="secondary-button" type="button">Odblokuj</button>
-          <button id="topUp" class="secondary-button" type="button">Zasil</button>
-          <button id="updateLimit" class="secondary-button" type="button">Ustaw limit</button>
-          <button id="resolveGridlock" class="secondary-button" type="button">Gridlock</button>
+        <div class="panel-head"><div><p class="section-label">Kontrola</p><h2>Operacje uczestnika</h2></div></div>
+        <div class="control-panel">
+          <div class="control-section wide-control">
+            <h3>Wybór banku</h3>
+            <label>Bank <select id="opsBic" data-participant-options></select></label>
+          </div>
+
+          <div class="control-section">
+            <h3>Status i blokady</h3>
+            <div class="form-grid single-column">
+              <label>Status <select id="opsStatus"><option>ACTIVE</option><option>SUSPENDED</option><option>DISABLED</option></select></label>
+              <label>Powód <input id="opsReason" value="OPERATOR_CONTROL" /></label>
+            </div>
+            <div class="button-row split-actions">
+              <button id="setStatus" class="secondary-button" type="button">Ustaw status</button>
+              <button id="blockParticipant" class="danger-button" type="button">Zablokuj</button>
+              <button id="unblockParticipant" class="secondary-button" type="button">Odblokuj</button>
+            </div>
+          </div>
+
+          <div class="control-section">
+            <h3>Płynność</h3>
+            <div class="form-grid single-column">
+              <label>Zasilenie <input id="topUpAmount" type="number" value="100000" /></label>
+            </div>
+            <div class="button-row split-actions">
+              <button id="topUp" class="secondary-button" type="button">Zasil</button>
+              <button id="resolveGridlock" class="secondary-button" type="button">Gridlock</button>
+            </div>
+          </div>
+
+          <div class="control-section">
+            <h3>Limity</h3>
+            <div class="form-grid single-column">
+              <label>Limit zadłużenia <input id="overdraftLimit" type="number" value="30000000" /></label>
+            </div>
+            <div class="button-row split-actions">
+              <button id="updateLimit" class="secondary-button" type="button">Ustaw limit</button>
+            </div>
+          </div>
         </div>
       </article>
     </section>

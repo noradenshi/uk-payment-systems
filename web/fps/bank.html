@@ -9,21 +9,21 @@
 <body>
   <section id="loginScreen" class="login-screen">
     <form id="loginForm" class="login-card">
-      <p class="eyebrow">Logowanie pracownika banku</p>
+      <p class="eyebrow">Autoryzacja API</p>
       <h1><span data-scheme-name></span> - bank</h1>
       <div class="form-grid">
-        <label>BIC banku <input id="loginBic" value="BARCGB2L" autocomplete="username" /></label>
+        <label>API key <input id="loginApiKey" value="ak_barcgb2l_dev" autocomplete="current-password" /></label>
       </div>
-      <button type="submit">Zaloguj</button>
-      <p class="notice">Podaj BIC uczestnika bankowego.</p>
-      <div class="status-strip"><span id="statusDot" class="dot"></span><strong id="message">Wymagane logowanie</strong></div>
+      <button type="submit">Ustaw klucz</button>
+      <p class="notice">Podaj API key. BIC jest publiczny; backend sprawdza dostęp wyłącznie po kluczu w nagłówku Authorization.</p>
+      <div class="status-strip"><span id="statusDot" class="dot"></span><strong id="message">Wymagany API key</strong></div>
     </form>
   </section>
 
   <main id="appScreen" class="shell hidden">
     <section class="topbar">
-      <div><p class="eyebrow">Pracownik banku</p><h1><span data-scheme-name></span> - panel banku</h1><p id="loggedBank"></p></div>
-      <div class="top-actions"><a class="link-button secondary-button" href="../index.html">Strony</a><button id="refresh" data-free="true" type="button">Odśwież</button><button id="logout" class="ghost-button" data-free="true" type="button">Wyloguj</button><div class="status-strip"><span id="statusDot" class="dot"></span><strong id="message">Gotowe</strong></div></div>
+      <div><p class="eyebrow">Bank API</p><h1><span data-scheme-name></span> - panel banku</h1><p id="loggedBank"></p></div>
+      <div class="top-actions"><a class="link-button secondary-button" href="../index.html">Strony</a><button id="refresh" data-free="true" type="button">Odśwież</button><button id="logout" class="ghost-button" data-free="true" type="button">Usuń klucz</button><div class="status-strip"><span id="statusDot" class="dot"></span><strong id="message">Gotowe</strong></div></div>
     </section>
     <section class="metrics-grid">
       <article class="metric-card"><span>Saldo</span><strong id="metricBalance">-</strong></article>

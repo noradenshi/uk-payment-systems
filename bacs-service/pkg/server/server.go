@@ -43,6 +43,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	// Participant Management
 	mux.HandleFunc("GET /v1/participants", s.handleListParticipants)
 	mux.HandleFunc("POST /v1/participants/register", s.handleRegisterParticipant)
+	mux.HandleFunc("GET /v1/participants/positions", s.authMiddleware(s.handleGetPosition))
 	mux.HandleFunc("PATCH /v1/participants/status", s.authMiddleware(s.handleUpdateParticipantStatus))
 	mux.HandleFunc("POST /v1/participants/block", s.authMiddleware(s.handleBlockParticipant))
 	mux.HandleFunc("GET /v1/participants/block", s.authMiddleware(s.handleGetBlockDetails))
@@ -520,6 +521,21 @@ func (s *Server) handleRegisterParticipant(w http.ResponseWriter, r *http.Reques
 		"name":    req.Name,
 		"status":  "ACTIVE",
 	})
+}
+
+func (s *Server) handleGetPosition(w http.ResponseWriter, r *http.Request) {
+	bic := auth.BICFromContext(r.Context())
+	if !validateBIC(bic) {
+		badRequest(w, "Invalid BIC format")
+		return
+	}
+	pos, err := s.Ledger.GetPosition(r.Context(), bic)
+	if err != nil {
+		log.Printf("Error fetching position for %s: %v", bic, err)
+		http.Error(w, "Participant not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, pos)
 }
 
 func (s *Server) handleUpdateParticipantStatus(w http.ResponseWriter, r *http.Request) {

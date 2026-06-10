@@ -202,7 +202,16 @@ function renderResult(data, emptyText) {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(scheme.baseUrl + path, options);
+  const requestOptions = { ...options };
+  const authToken = requestOptions.authToken ?? state.user?.apiKey;
+  delete requestOptions.authToken;
+  const headers = new Headers(requestOptions.headers || {});
+  if (authToken && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${authToken}`);
+  }
+  requestOptions.headers = headers;
+
+  const response = await fetch(scheme.baseUrl + path, requestOptions);
   const text = await response.text();
   let data = null;
   if (text) {
@@ -217,6 +226,25 @@ async function api(path, options = {}) {
     throw new Error(detail || `HTTP ${response.status}`);
   }
   return data;
+}
+
+function inferBicFromApiKey(apiKey) {
+  const match = String(apiKey || "").match(/^ak_([a-z0-9]{8,11})_dev$/i);
+  return match ? match[1].toUpperCase() : "";
+}
+
+async function resolveBankIdentity(apiKey) {
+  let position = null;
+  try {
+    position = await api("/v1/participants/positions", { authToken: apiKey });
+  } catch {
+    position = null;
+  }
+  const bic = String(position?.bic || inferBicFromApiKey(apiKey)).toUpperCase();
+  if (!bic) {
+    throw new Error("Nie można ustalić BIC dla tego API key. Backend potrzebuje endpointu /v1/participants/positions albo /v1/auth/me.");
+  }
+  return { bic, position };
 }
 
 async function centralTopUp(bic, amount) {
@@ -403,14 +431,18 @@ async function refreshOperator() {
 }
 
 async function refreshBank() {
-  const bic = state.user?.bic;
-  if (!bic) return;
+  const apiKey = state.user?.apiKey;
+  if (!apiKey) return;
   setBusy(true, "Odświeżanie widoku banku...");
   try {
+    const identity = await resolveBankIdentity(apiKey);
+    const bic = identity.bic;
+    state.user.bic = bic;
+    sessionStorage.setItem(`ukps-${scheme.key}-bank`, JSON.stringify(state.user));
     await loadCoreData();
     const participant = state.participants.find((item) => item.bic === bic);
     const bankPayments = state.payments.filter((item) => bankMatches(item, bic));
-    const position = await api(`/v1/participants/${bic}/positions`).catch(() => null);
+    const position = identity.position;
     const limits = await api(`${scheme.limitsPath}?bic=${encodeURIComponent(bic)}`).catch(() => null);
     const balance = Number(participant?.balance || 0);
     const overdraft = Number(participant?.overdraft_limit || 0);
@@ -528,19 +560,19 @@ function setupOperatorEvents() {
 function setupBankEvents() {
   $("loginForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    setBusy(true, "Logowanie...");
+    setBusy(true, "Sprawdzanie API key...");
     try {
-      await loadCoreData();
-      const bic = $("loginBic").value.trim().toUpperCase();
-      const exists = state.participants.some((item) => item.bic === bic);
-      if (!exists) throw new Error("Nie znaleziono banku o podanym BIC.");
-      state.user = { bic };
+      const apiKey = $("loginApiKey").value.trim();
+      if (!apiKey) throw new Error("Podaj API key.");
+      const identity = await resolveBankIdentity(apiKey);
+      const bic = identity.bic;
+      state.user = { bic, apiKey };
       sessionStorage.setItem(`ukps-${scheme.key}-bank`, JSON.stringify(state.user));
       $("loginScreen").classList.add("hidden");
       $("appScreen").classList.remove("hidden");
       await refreshBank();
     } catch (error) {
-      setBusy(false, `Logowanie: ${error.message}`);
+      setBusy(false, `API key: ${error.message}`);
     }
   });
   $("logout")?.addEventListener("click", () => {
@@ -548,15 +580,14 @@ function setupBankEvents() {
     state.user = null;
     $("appScreen").classList.add("hidden");
     $("loginScreen").classList.remove("hidden");
-    setBusy(false, "Wylogowano");
+    setBusy(false, "Usunięto API key");
   });
   $("refresh")?.addEventListener("click", refreshBank);
   $("paymentForm")?.addEventListener("submit", (event) => {
     event.preventDefault();
     if (scheme.submitKind === "bacs") {
       const content = $("standard18").value.trim();
-      const su = state.user.bic;
-      jsonAction("Przyjęcie pliku BACS do cyklu", () => api(`${scheme.paymentPath}?su_bic=${encodeURIComponent(su)}&filename=bank-submission.txt`, {
+      jsonAction("Przyjęcie pliku BACS do cyklu", () => api(`${scheme.paymentPath}?filename=bank-submission.txt`, {
         method: "POST",
         headers: { "Content-Type": "text/plain" },
         body: content,
@@ -586,7 +617,7 @@ function setupBankEvents() {
   $("loadNetting")?.addEventListener("click", async () => {
     const date = $("cycleDate").value || today;
     jsonAction("Pobranie raportu", async () => {
-      const report = await api(`/v1/payments/bacs/reports/${date}/netting/${state.user.bic}`);
+      const report = await api(`/v1/payments/bacs/reports/${date}/su`);
       setHTML("nettingResult", renderResult(report, "Brak raportu."));
     }, null);
   });
@@ -611,6 +642,11 @@ async function initBankSession() {
   if (!saved) return;
   try {
     state.user = JSON.parse(saved);
+    if (!state.user?.apiKey) {
+      sessionStorage.removeItem(`ukps-${scheme.key}-bank`);
+      state.user = null;
+      return;
+    }
     $("loginScreen").classList.add("hidden");
     $("appScreen").classList.remove("hidden");
     await refreshBank();
