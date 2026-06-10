@@ -18,7 +18,7 @@ func GenerateAPIKey() (string, error) {
 	if _, err := rand.Read(buf); err != nil {
 		return "", err
 	}
-	return "ak_" + hex.EncodeToString(buf), nil
+	return hex.EncodeToString(buf), nil
 }
 
 func BICFromContext(ctx context.Context) string {
