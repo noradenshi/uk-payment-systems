@@ -137,19 +137,19 @@ func (s *LedgerService) GetPosition(ctx context.Context, bic string) (map[string
 	return map[string]interface{}{"bic": bic, "balance": balance, "available": balance, "earmarked": 0}, nil
 }
 
-func (s *LedgerService) SettleSIP(ctx context.Context, msgID, sender, receiver string, amount float64, endToEndID string, senderSortCode, receiverSortCode string) (SettlementResult, error) {
-	result, err := s.settleSIPOnce(ctx, msgID, sender, receiver, amount, endToEndID, senderSortCode, receiverSortCode)
+func (s *LedgerService) SettleSIP(ctx context.Context, msgID, sender, receiver string, amount float64, endToEndID string, senderSortCode, receiverSortCode, senderAccount, receiverAccount string) (SettlementResult, error) {
+	result, err := s.settleSIPOnce(ctx, msgID, sender, receiver, amount, endToEndID, senderSortCode, receiverSortCode, senderAccount, receiverAccount)
 	if err != nil {
 		return result, err
 	}
 	if result.Status == "PDNG" {
 		s.ResolveGridlock(ctx)
-		result, err = s.settleSIPOnce(ctx, msgID, sender, receiver, amount, endToEndID, senderSortCode, receiverSortCode)
+		result, err = s.settleSIPOnce(ctx, msgID, sender, receiver, amount, endToEndID, senderSortCode, receiverSortCode, senderAccount, receiverAccount)
 	}
 	return result, err
 }
 
-func (s *LedgerService) settleSIPOnce(ctx context.Context, msgID, sender, receiver string, amount float64, endToEndID string, senderSortCode, receiverSortCode string) (SettlementResult, error) {
+func (s *LedgerService) settleSIPOnce(ctx context.Context, msgID, sender, receiver string, amount float64, endToEndID string, senderSortCode, receiverSortCode, senderAccount, receiverAccount string) (SettlementResult, error) {
 	var result SettlementResult
 	if amount > fpsSinglePaymentLimit {
 		return SettlementResult{Status: "RJCT", ReasonCode: "AM05"}, nil

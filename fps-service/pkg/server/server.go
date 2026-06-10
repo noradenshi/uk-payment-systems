@@ -512,7 +512,7 @@ func (s *Server) processXMLPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := s.Ledger.SettleSIP(r.Context(), msg.MsgId, msg.Sender, msg.DestBIC, msg.Amount, msg.EndToEndId, msg.SenderSortCode, msg.DestSortCode)
+	res, err := s.Ledger.SettleSIP(r.Context(), msg.MsgId, msg.Sender, msg.DestBIC, msg.Amount, msg.EndToEndId, msg.SenderSortCode, msg.DestSortCode, msg.GetDebtorAccount(), msg.GetCreditorAccount())
 	if err != nil {
 		log.Printf("[CRITICAL] Ledger system failure for MsgId %s: %v", msg.MsgId, err)
 		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
@@ -534,12 +534,14 @@ func (s *Server) processXMLPayment(w http.ResponseWriter, r *http.Request) {
 		s.Events.Publish(msg.DestBIC, events.Event{
 			Type: "payment.received",
 			Data: map[string]interface{}{
-				"msg_id":     msg.MsgId,
-				"sender":     msg.Sender,
-				"receiver":   msg.DestBIC,
-				"amount":     msg.Amount,
-				"status":     "SETTLED",
-				"scheme":     "FPS",
+				"msg_id":           msg.MsgId,
+				"sender":           msg.Sender,
+				"receiver":         msg.DestBIC,
+				"receiver_sort":    msg.DestSortCode,
+				"receiver_account": msg.GetCreditorAccount(),
+				"amount":           msg.Amount,
+				"status":           "SETTLED",
+				"scheme":           "FPS",
 			},
 		})
 	} else {
@@ -555,11 +557,12 @@ func (s *Server) processXMLPayment(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		MsgID           string  `json:"msg_id"`
-		EndToEndID      string  `json:"end_to_end_id"`
-		ReceiverBIC     string  `json:"receiver_bic"`
-		ReceiverSortCode string `json:"receiver_sort_code"`
-		Amount          float64 `json:"amount"`
+		MsgID            string  `json:"msg_id"`
+		EndToEndID       string  `json:"end_to_end_id"`
+		ReceiverBIC      string  `json:"receiver_bic"`
+		ReceiverSortCode string  `json:"receiver_sort_code"`
+		ReceiverAccount  string  `json:"receiver_account"`
+		Amount           float64 `json:"amount"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		badRequest(w, "Invalid request body")
@@ -595,7 +598,7 @@ func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := s.Ledger.SettleSIP(r.Context(), req.MsgID, senderBic, req.ReceiverBIC, req.Amount, req.EndToEndID, senderSortCode, req.ReceiverSortCode)
+	res, err := s.Ledger.SettleSIP(r.Context(), req.MsgID, senderBic, req.ReceiverBIC, req.Amount, req.EndToEndID, senderSortCode, req.ReceiverSortCode, "", req.ReceiverAccount)
 	if err != nil {
 		log.Printf("[CRITICAL] Ledger system failure for MsgId %s: %v", req.MsgID, err)
 		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
@@ -617,12 +620,14 @@ func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 		s.Events.Publish(req.ReceiverBIC, events.Event{
 			Type: "payment.received",
 			Data: map[string]interface{}{
-				"msg_id":     req.MsgID,
-				"sender":     senderBic,
-				"receiver":   req.ReceiverBIC,
-				"amount":     req.Amount,
-				"status":     "SETTLED",
-				"scheme":     "FPS",
+				"msg_id":           req.MsgID,
+				"sender":           senderBic,
+				"receiver":         req.ReceiverBIC,
+				"receiver_sort":    req.ReceiverSortCode,
+				"receiver_account": req.ReceiverAccount,
+				"amount":           req.Amount,
+				"status":           "SETTLED",
+				"scheme":           "FPS",
 			},
 		})
 	}
@@ -664,7 +669,16 @@ func (s *Server) processISO8583Payment(w http.ResponseWriter, r *http.Request) {
 	amount := float64(msg.DE4_Amount) / 100.0
 	msgID := fmt.Sprintf("ISO8583-%s-%06d", time.Now().Format("20060102"), msg.DE11_Trace)
 
-	res, err := s.Ledger.SettleSIP(r.Context(), msgID, msg.DE32_Acquirer, msg.DE100_Receiver, amount, msgID, "", "")
+	senderSort := ""
+	if len(msg.DE32_Acquirer) >= 6 {
+		senderSort = msg.DE32_Acquirer[0:6] // Fallback mapping if BIC contains sort info
+	}
+	receiverSort := ""
+	if len(msg.DE100_Receiver) >= 6 {
+		receiverSort = msg.DE100_Receiver[0:6]
+	}
+
+	res, err := s.Ledger.SettleSIP(r.Context(), msgID, msg.DE32_Acquirer, msg.DE100_Receiver, amount, msgID, senderSort, receiverSort, msg.DE102_SourceAccount, msg.DE103_DestAccount)
 	if err != nil {
 		log.Printf("[CRITICAL] ISO8583 ledger failure for trace %d: %v", msg.DE11_Trace, err)
 		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
@@ -675,12 +689,14 @@ func (s *Server) processISO8583Payment(w http.ResponseWriter, r *http.Request) {
 		s.Events.Publish(msg.DE100_Receiver, events.Event{
 			Type: "payment.received",
 			Data: map[string]interface{}{
-				"msg_id":     msgID,
-				"sender":     msg.DE32_Acquirer,
-				"receiver":   msg.DE100_Receiver,
-				"amount":     amount,
-				"status":     "SETTLED",
-				"scheme":     "FPS",
+				"msg_id":           msgID,
+				"sender":           msg.DE32_Acquirer,
+				"receiver":         msg.DE100_Receiver,
+				"receiver_sort":    msg.DE102_SourceAccount,
+				"receiver_account": msg.DE103_DestAccount,
+				"amount":           amount,
+				"status":           "SETTLED",
+				"scheme":           "FPS",
 			},
 		})
 	}
@@ -693,11 +709,13 @@ func (s *Server) processISO8583Payment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := &iso8583.Message0210{
-		DE39_RespCode: respCode,
-		DE4_Amount:    msg.DE4_Amount,
-		DE11_Trace:    msg.DE11_Trace,
-		DE32_Acquirer: msg.DE32_Acquirer,
-		DE100_Receiver: msg.DE100_Receiver,
+		DE39_RespCode:       respCode,
+		DE4_Amount:          msg.DE4_Amount,
+		DE11_Trace:          msg.DE11_Trace,
+		DE32_Acquirer:       msg.DE32_Acquirer,
+		DE100_Receiver:      msg.DE100_Receiver,
+		DE102_SourceAccount: msg.DE102_SourceAccount,
+		DE103_DestAccount:   msg.DE103_DestAccount,
 	}
 
 	w.Header().Set("Content-Type", "application/octet-stream")
@@ -724,11 +742,11 @@ func (s *Server) handleValidatePayment(w http.ResponseWriter, r *http.Request) {
 	}
 	valid := req.Amount > 0 && req.Amount <= 1000000.00
 	result := map[string]interface{}{
-		"valid":           valid,
-		"sender_bic":      req.SenderBIC,
-		"receiver_bic":    req.ReceiverBIC,
-		"amount":          req.Amount,
-		"checks_passed":   []string{"bic_format", "positive_amount", "limit_check"},
+		"valid":         valid,
+		"sender_bic":    req.SenderBIC,
+		"receiver_bic":  req.ReceiverBIC,
+		"amount":        req.Amount,
+		"checks_passed": []string{"bic_format", "positive_amount", "limit_check"},
 	}
 	writeJSON(w, http.StatusOK, result)
 }
@@ -1080,11 +1098,11 @@ func (s *Server) handleSystemSchedule(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"date":             time.Now().Format("2006-01-02"),
-		"opening_time":     opening,
-		"closing_time":     closing,
-		"settlement_times": times,
-		"timezone":         "Europe/London",
+		"date":                 time.Now().Format("2006-01-02"),
+		"opening_time":         opening,
+		"closing_time":         closing,
+		"settlement_times":     times,
+		"timezone":             "Europe/London",
 		"demo_session_minutes": cfg["demo_session_minutes"],
 	})
 }
@@ -1145,11 +1163,13 @@ func (s *Server) handleISO8583TCP(conn net.Conn) {
 	if err := checkOperatingHours(cfg, time.Now()); err != nil {
 		log.Printf("ISO8583 TCP: %v", err)
 		resp := &iso8583.Message0210{
-			DE39_RespCode: "91",
-			DE4_Amount:    msg.DE4_Amount,
-			DE11_Trace:    msg.DE11_Trace,
-			DE32_Acquirer: msg.DE32_Acquirer,
-			DE100_Receiver: msg.DE100_Receiver,
+			DE39_RespCode:       "91",
+			DE4_Amount:          msg.DE4_Amount,
+			DE11_Trace:          msg.DE11_Trace,
+			DE32_Acquirer:       msg.DE32_Acquirer,
+			DE100_Receiver:      msg.DE100_Receiver,
+			DE102_SourceAccount: msg.DE102_SourceAccount,
+			DE103_DestAccount:   msg.DE103_DestAccount,
 		}
 		encoded := resp.Encode()
 		binary.Write(conn, binary.BigEndian, uint16(len(encoded)))
@@ -1163,7 +1183,16 @@ func (s *Server) handleISO8583TCP(conn net.Conn) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	res, err := s.Ledger.SettleSIP(ctx, msgID, msg.DE32_Acquirer, msg.DE100_Receiver, amount, msgID, "", "")
+	senderSort := ""
+	if len(msg.DE32_Acquirer) >= 6 {
+		senderSort = msg.DE32_Acquirer[0:6]
+	}
+	receiverSort := ""
+	if len(msg.DE100_Receiver) >= 6 {
+		receiverSort = msg.DE100_Receiver[0:6]
+	}
+
+	res, err := s.Ledger.SettleSIP(ctx, msgID, msg.DE32_Acquirer, msg.DE100_Receiver, amount, msgID, senderSort, receiverSort, msg.DE102_SourceAccount, msg.DE103_DestAccount)
 	if err != nil {
 		log.Printf("ISO8583 TCP: ledger failure: %v", err)
 		return
@@ -1173,12 +1202,14 @@ func (s *Server) handleISO8583TCP(conn net.Conn) {
 		s.Events.Publish(msg.DE100_Receiver, events.Event{
 			Type: "payment.received",
 			Data: map[string]interface{}{
-				"msg_id":   msgID,
-				"sender":   msg.DE32_Acquirer,
-				"receiver": msg.DE100_Receiver,
-				"amount":   amount,
-				"status":   "SETTLED",
-				"scheme":   "FPS",
+				"msg_id":           msgID,
+				"sender":           msg.DE32_Acquirer,
+				"receiver":         msg.DE100_Receiver,
+				"receiver_sort":    msg.DE102_SourceAccount,
+				"receiver_account": msg.DE103_DestAccount,
+				"amount":           amount,
+				"status":           "SETTLED",
+				"scheme":           "FPS",
 			},
 		})
 	}
@@ -1191,11 +1222,13 @@ func (s *Server) handleISO8583TCP(conn net.Conn) {
 	}
 
 	resp := &iso8583.Message0210{
-		DE39_RespCode: respCode,
-		DE4_Amount:    msg.DE4_Amount,
-		DE11_Trace:    msg.DE11_Trace,
-		DE32_Acquirer: msg.DE32_Acquirer,
-		DE100_Receiver: msg.DE100_Receiver,
+		DE39_RespCode:       respCode,
+		DE4_Amount:          msg.DE4_Amount,
+		DE11_Trace:          msg.DE11_Trace,
+		DE32_Acquirer:       msg.DE32_Acquirer,
+		DE100_Receiver:      msg.DE100_Receiver,
+		DE102_SourceAccount: msg.DE102_SourceAccount,
+		DE103_DestAccount:   msg.DE103_DestAccount,
 	}
 
 	encoded := resp.Encode()
