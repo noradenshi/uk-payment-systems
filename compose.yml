@@ -94,6 +94,16 @@ services:
       bacs-db:
         condition: service_healthy
 
+  web-app:
+    build: ./web
+    container_name: ukps_web
+    ports:
+      - "4173:4173"
+    depends_on:
+      - chaps-app
+      - fps-app
+      - bacs-app
+
 networks:
   chaps_klik:
     name: chaps_klik
