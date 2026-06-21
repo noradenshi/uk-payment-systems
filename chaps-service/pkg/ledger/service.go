@@ -25,6 +25,7 @@ var ErrInsufficientFunds = errors.New("insufficient funds")
 var ErrAccountNotFound = errors.New("account not found")
 var ErrAccountClosed = errors.New("account closed")
 var ErrSanctionsBlock = errors.New("sanctions block")
+var ErrParticipantInUse = errors.New("participant has related records")
 
 const singlePaymentLimit = 20000000.00
 const dailyParticipantLimit = 100000000.00
@@ -96,6 +97,57 @@ func (s *LedgerService) UpdateParticipantStatus(ctx context.Context, bic string,
 			SET status = $1::participant_status, block_reason = NULLIF($2, ''), blocked_at = CASE WHEN $1 = 'SUSPENDED' THEN NOW() ELSE NULL END, updated_at = NOW()
 			WHERE bic_code = $3`, status, reason, bic)
 		return err
+	})
+}
+
+func (s *LedgerService) UpdateParticipant(ctx context.Context, bic, name, sortCode string, balance float64) error {
+	return pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			UPDATE participant_profiles
+			SET name = $1, sort_code = $2
+			WHERE bic_code = $3`, name, sortCode, bic)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrAccountNotFound
+		}
+		_, err = tx.Exec(ctx, `
+			UPDATE participant_liquidity
+			SET balance = $1, updated_at = NOW()
+			WHERE bic_code = $2`, balance, bic)
+		return err
+	})
+}
+
+func (s *LedgerService) DeleteParticipant(ctx context.Context, bic string) error {
+	return pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+		var used bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM transactions WHERE sender_bic = $1 OR receiver_bic = $1
+				UNION ALL
+				SELECT 1 FROM journal_entries WHERE account_bic = $1
+			)`, bic).Scan(&used); err != nil {
+			return err
+		}
+		if used {
+			return ErrParticipantInUse
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM participant_liquidity WHERE bic_code = $1", bic); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM participant_statuses WHERE bic_code = $1", bic); err != nil {
+			return err
+		}
+		tag, err := tx.Exec(ctx, "DELETE FROM participant_profiles WHERE bic_code = $1", bic)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrAccountNotFound
+		}
+		return nil
 	})
 }
 

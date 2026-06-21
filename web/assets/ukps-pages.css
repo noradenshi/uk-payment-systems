@@ -287,6 +287,12 @@ label {
   font-size: 13px;
 }
 
+.field-label.required::after {
+  content: " *";
+  color: #dc2626;
+  font-weight: 800;
+}
+
 input,
 select,
 textarea,
@@ -403,6 +409,31 @@ button:disabled {
 
 .split-actions button {
   min-width: 0;
+}
+
+.compact-head {
+  margin-bottom: 10px;
+}
+
+.bacs-builder {
+  margin: 14px 0;
+  padding: 12px;
+  border: 1px solid #dbe4ee;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.bacs-payment-rows {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.bacs-payment-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.5fr) minmax(100px, .8fr) minmax(100px, .8fr) minmax(120px, 1fr) auto;
+  gap: 10px;
+  align-items: end;
 }
 
 .control-block {
@@ -821,6 +852,10 @@ th {
   }
 
   .control-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .bacs-payment-row {
     grid-template-columns: 1fr;
   }
 }

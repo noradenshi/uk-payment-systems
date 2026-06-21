@@ -38,12 +38,30 @@
       <form id="registerParticipant" class="panel">
         <div class="panel-head"><div><p class="section-label">Rejestracja</p><h2>Nowy uczestnik</h2></div></div>
         <div class="form-grid">
-          <label>BIC <input id="newBic" value="NEWFGB2L" /></label>
-          <label>Nazwa <input id="newName" value="New FPS Bank" /></label>
-          <label>Sort code <input id="newSortCode" value="23-45-67" required pattern="[0-9]{2}-?[0-9]{2}-?[0-9]{2}" title="Wpisz 6 cyfr, np. 123456 albo 12-34-56" /></label>
-          <label>Saldo początkowe <input id="newBalance" type="number" value="100000" /></label>
+          <label><span class="field-label required">BIC</span><input id="newBic" value="NEWFGB2L" required /></label>
+          <label><span class="field-label required">Nazwa</span><input id="newName" value="New FPS Bank" required /></label>
+          <label><span class="field-label required">Sort code</span><input id="newSortCode" value="23-45-67" required pattern="([0-9]{6}|[0-9]{2}-[0-9]{2}-[0-9]{2})" title="Wpisz 6 cyfr, np. 123456 albo 12-34-56" /></label>
+          <label><span class="field-label">Saldo początkowe</span><input id="newBalance" type="number" value="100000" min="0" /></label>
+          <label><span class="field-label">Typ uczestnika</span><select id="newParticipantType"><option>DIRECT</option><option>INDIRECT</option></select></label>
+          <label><span class="field-label">Sponsor BIC</span><input id="newSponsorBic" value="" /></label>
         </div>
         <button type="submit">Zarejestruj bank</button>
+      </form>
+
+      <form id="editParticipant" class="panel">
+        <div class="panel-head"><div><p class="section-label">Edycja</p><h2>Istniejący uczestnik</h2></div></div>
+        <div class="form-grid">
+          <label class="wide"><span class="field-label required">Uczestnik</span><select id="editBic" data-participant-options required></select></label>
+          <label><span class="field-label required">Nazwa</span><input id="editName" required /></label>
+          <label><span class="field-label required">Sort code</span><input id="editSortCode" required pattern="([0-9]{6}|[0-9]{2}-[0-9]{2}-[0-9]{2})" title="Wpisz 6 cyfr, np. 123456 albo 12-34-56" /></label>
+          <label><span class="field-label">Saldo</span><input id="editBalance" type="number" min="0" /></label>
+          <label><span class="field-label">Typ uczestnika</span><select id="editParticipantType"><option>DIRECT</option><option>INDIRECT</option></select></label>
+          <label><span class="field-label">Sponsor BIC</span><input id="editSponsorBic" /></label>
+        </div>
+        <div class="button-row split-actions">
+          <button type="submit">Zapisz zmiany</button>
+          <button id="deleteParticipant" class="danger-button" type="button">Usuń uczestnika</button>
+        </div>
       </form>
 
       <article class="panel">

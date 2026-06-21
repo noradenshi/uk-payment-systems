@@ -35,6 +35,22 @@
       <form id="paymentForm" class="panel">
         <div class="panel-head"><div><p class="section-label">Plik BACS Standard 18</p><h2>Wyślij zgłoszenie</h2></div><button id="validatePayment" class="secondary-button" type="button">Waliduj</button></div>
         <p class="notice">Wysłanie pliku tylko przyjmuje zgłoszenie do cyklu. Saldo zmieni się po przetworzeniu i rozliczeniu cyklu przez operatora.</p>
+        <div class="bacs-builder">
+          <div class="panel-head compact-head">
+            <div><p class="section-label">Odbiorcy</p><h3>Pozycje w pliku</h3></div>
+            <button id="addBacsPayment" class="secondary-button" type="button">Dodaj pozycję</button>
+          </div>
+          <div id="bacsPaymentRows" class="bacs-payment-rows">
+            <div class="bacs-payment-row">
+              <label>Odbiorca <select data-bacs-recipient></select></label>
+              <label>Konto <input data-bacs-account value="01234567" maxlength="8" /></label>
+              <label>Kwota <input data-bacs-amount type="number" min="0.01" step="0.01" value="1250" /></label>
+              <label>Referencja <input data-bacs-reference value="BACS-001" maxlength="14" /></label>
+              <button class="secondary-button" data-remove-bacs-payment type="button">Usuń</button>
+            </div>
+          </div>
+          <button id="generateBacsFile" class="secondary-button" type="button">Aktualizuj treść pliku</button>
+        </div>
         <label>Treść pliku
           <textarea id="standard18"></textarea>
         </label>
@@ -50,7 +66,7 @@
     </section>
     <section class="work-grid">
       <article class="panel"><h2>Szczegóły banku</h2><div id="bankDetails" class="detail-sections">-</div></article>
-      <article class="panel"><h2>Zgłoszenia BACS</h2><div class="table-wrap"><table><thead><tr><th>ID</th><th>SU</th><th>Odbiorca</th><th>Kwota</th><th>Status</th></tr></thead><tbody id="paymentsBody"></tbody></table></div></article>
+      <article class="panel"><h2>Zgłoszenia BACS</h2><div class="table-wrap"><table><thead><tr><th>ID</th><th>SU</th><th>Pozycje</th><th>Kwota</th><th>Status</th></tr></thead><tbody id="paymentsBody"></tbody></table></div></article>
     </section>
   </main>
   <script>window.UKPS_PAGE = { scheme: "bacs", role: "bank" };</script>

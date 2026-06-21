@@ -23,6 +23,7 @@ func NewLedgerService(pool *pgxpool.Pool) *LedgerService {
 
 var ErrAccountNotFound = errors.New("account not found")
 var ErrInsufficientFunds = errors.New("insufficient funds")
+var ErrParticipantInUse = errors.New("participant has related records")
 
 // ── Participant operations ──
 
@@ -133,6 +134,65 @@ func (s *LedgerService) ListParticipants(ctx context.Context) ([]map[string]inte
 		result = append(result, entry)
 	}
 	return result, rows.Err()
+}
+
+func (s *LedgerService) UpdateParticipant(ctx context.Context, bic, name, sortCode string, balance float64, suCode string, isSU, isDSU bool) error {
+	return pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			UPDATE participant_profiles
+			SET name = $1, sort_code = $2, su_code = NULLIF($3, ''), is_service_user = $4, is_destination_user = $5
+			WHERE bic_code = $6`, name, sortCode, suCode, isSU, isDSU, bic)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrAccountNotFound
+		}
+		_, err = tx.Exec(ctx, `
+			UPDATE participant_liquidity
+			SET balance = $1, updated_at = NOW()
+			WHERE bic_code = $2`, balance, bic)
+		return err
+	})
+}
+
+func (s *LedgerService) DeleteParticipant(ctx context.Context, bic string) error {
+	return pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+		var used bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM bacs_submissions WHERE su_bic = $1
+				UNION ALL
+				SELECT 1 FROM bacs_transactions WHERE debtor_bic = $1 OR creditor_bic = $1
+				UNION ALL
+				SELECT 1 FROM bacs_bilateral_positions WHERE debtor_bic = $1 OR creditor_bic = $1
+				UNION ALL
+				SELECT 1 FROM bacs_net_positions WHERE bic_code = $1
+				UNION ALL
+				SELECT 1 FROM bacs_mandates WHERE su_bic = $1
+				UNION ALL
+				SELECT 1 FROM bacs_journal_entries WHERE account_bic = $1
+			)`, bic).Scan(&used); err != nil {
+			return err
+		}
+		if used {
+			return ErrParticipantInUse
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM participant_liquidity WHERE bic_code = $1", bic); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM participant_statuses WHERE bic_code = $1", bic); err != nil {
+			return err
+		}
+		tag, err := tx.Exec(ctx, "DELETE FROM participant_profiles WHERE bic_code = $1", bic)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrAccountNotFound
+		}
+		return nil
+	})
 }
 
 func (s *LedgerService) UpdateParticipantStatus(ctx context.Context, bic, status, reason string) error {

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -36,6 +37,12 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("OPTIONS /", handleOptions)
 	mux.HandleFunc("POST /v1/participants/register", s.handleRegister)
 	mux.HandleFunc("GET /v1/participants", s.handleListParticipants)
+	mux.HandleFunc("PATCH /v1/participants/{bic}", s.handleUpdateParticipant)
+	mux.HandleFunc("DELETE /v1/participants/{bic}", s.handleDeleteParticipant)
+	mux.HandleFunc("PATCH /v1/participants/{bic}/status", s.handleUpdateParticipantStatus)
+	mux.HandleFunc("POST /v1/participants/{bic}/block", s.handleBlockParticipant)
+	mux.HandleFunc("GET /v1/participants/{bic}/block", s.handleGetBlock)
+	mux.HandleFunc("DELETE /v1/participants/{bic}/block", s.handleUnblockParticipant)
 	mux.HandleFunc("PATCH /v1/participants/status", s.authMiddleware(s.handleUpdateParticipantStatus))
 	mux.HandleFunc("POST /v1/participants/block", s.authMiddleware(s.handleBlockParticipant))
 	mux.HandleFunc("GET /v1/participants/block", s.authMiddleware(s.handleGetBlock))
@@ -101,6 +108,13 @@ func notImplemented(w http.ResponseWriter) {
 
 func validateBIC(bic string) bool {
 	return reBIC.MatchString(bic)
+}
+
+func participantBICFromRequest(r *http.Request) string {
+	if bic := auth.BICFromContext(r.Context()); bic != "" {
+		return bic
+	}
+	return strings.ToUpper(r.PathValue("bic"))
 }
 
 func setCORS(w http.ResponseWriter) {
@@ -271,7 +285,7 @@ func (s *Server) handleListParticipants(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleUpdateParticipantStatus(w http.ResponseWriter, r *http.Request) {
-	bic := auth.BICFromContext(r.Context())
+	bic := participantBICFromRequest(r)
 	if !validateBIC(bic) {
 		badRequest(w, "Invalid BIC format")
 		return
@@ -297,8 +311,78 @@ func (s *Server) handleUpdateParticipantStatus(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, map[string]string{"bic": bic, "status": req.Status})
 }
 
+func (s *Server) handleUpdateParticipant(w http.ResponseWriter, r *http.Request) {
+	bic := strings.ToUpper(r.PathValue("bic"))
+	if !validateBIC(bic) {
+		badRequest(w, "BIC must be 8-11 alphanumeric characters")
+		return
+	}
+	var req struct {
+		Name            string  `json:"name"`
+		SortCode        string  `json:"sort_code"`
+		Balance         float64 `json:"balance"`
+		ParticipantType string  `json:"participant_type"`
+		SponsorBic      string  `json:"sponsor_bic"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		badRequest(w, "Invalid request body")
+		return
+	}
+	if req.Name == "" {
+		badRequest(w, "name is required")
+		return
+	}
+	if req.SortCode == "" {
+		badRequest(w, "sort_code is required")
+		return
+	}
+	if req.Balance < 0 {
+		badRequest(w, "balance cannot be negative")
+		return
+	}
+	if req.ParticipantType == "" {
+		req.ParticipantType = "DIRECT"
+	}
+	if req.ParticipantType != "DIRECT" && req.ParticipantType != "INDIRECT" {
+		badRequest(w, "participant_type must be DIRECT or INDIRECT")
+		return
+	}
+	if err := s.Ledger.UpdateParticipant(r.Context(), bic, req.Name, req.SortCode, req.Balance, req.ParticipantType, req.SponsorBic); err != nil {
+		if errors.Is(err, ledger.ErrAccountNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "participant not found"})
+			return
+		}
+		log.Printf("Failed to update participant %s: %v", bic, err)
+		http.Error(w, "Failed to update participant", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"bic": bic, "status": "updated"})
+}
+
+func (s *Server) handleDeleteParticipant(w http.ResponseWriter, r *http.Request) {
+	bic := strings.ToUpper(r.PathValue("bic"))
+	if !validateBIC(bic) {
+		badRequest(w, "BIC must be 8-11 alphanumeric characters")
+		return
+	}
+	if err := s.Ledger.DeleteParticipant(r.Context(), bic); err != nil {
+		if errors.Is(err, ledger.ErrAccountNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "participant not found"})
+			return
+		}
+		if errors.Is(err, ledger.ErrParticipantInUse) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "participant has related payments or journal entries"})
+			return
+		}
+		log.Printf("Failed to delete participant %s: %v", bic, err)
+		http.Error(w, "Failed to delete participant", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"bic": bic, "status": "deleted"})
+}
+
 func (s *Server) handleGetBlock(w http.ResponseWriter, r *http.Request) {
-	bic := auth.BICFromContext(r.Context())
+	bic := participantBICFromRequest(r)
 	if !validateBIC(bic) {
 		badRequest(w, "Invalid BIC format")
 		return
@@ -403,7 +487,7 @@ func (s *Server) handleTopUp(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleBlockParticipant(w http.ResponseWriter, r *http.Request) {
-	bic := auth.BICFromContext(r.Context())
+	bic := participantBICFromRequest(r)
 	if !validateBIC(bic) {
 		badRequest(w, "Invalid BIC format")
 		return
@@ -428,7 +512,7 @@ func (s *Server) handleBlockParticipant(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleUnblockParticipant(w http.ResponseWriter, r *http.Request) {
-	bic := auth.BICFromContext(r.Context())
+	bic := participantBICFromRequest(r)
 	if !validateBIC(bic) {
 		badRequest(w, "Invalid BIC format")
 		return

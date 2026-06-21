@@ -23,15 +23,31 @@
       <form id="registerParticipant" class="panel">
         <div class="panel-head"><div><p class="section-label">Rejestracja</p><h2>Nowy service user</h2></div></div>
         <div class="form-grid">
-          <label>BIC <input id="newBic" value="NEWBACS1" /></label>
-          <label>Nazwa <input id="newName" value="New BACS Service User" /></label>
-          <label>Sort code <input id="newSortCode" value="34-56-78" required pattern="[0-9]{2}-?[0-9]{2}-?[0-9]{2}" title="Wpisz 6 cyfr, np. 123456 albo 12-34-56" /></label>
-          <label>Saldo początkowe <input id="newBalance" type="number" value="100000" /></label>
-          <label>Kod SU <input id="newSuCode" value="123456" /></label>
+          <label><span class="field-label required">BIC</span><input id="newBic" value="NEWBACS1" required /></label>
+          <label><span class="field-label required">Nazwa</span><input id="newName" value="New BACS Service User" required /></label>
+          <label><span class="field-label required">Sort code</span><input id="newSortCode" value="34-56-78" required pattern="([0-9]{6}|[0-9]{2}-[0-9]{2}-[0-9]{2})" title="Wpisz 6 cyfr, np. 123456 albo 12-34-56" /></label>
+          <label><span class="field-label">Saldo początkowe</span><input id="newBalance" type="number" value="100000" min="0" /></label>
+          <label><span class="field-label">Kod SU</span><input id="newSuCode" value="123456" /></label>
           <label><input id="newServiceUser" type="checkbox" checked /> Service user</label>
           <label><input id="newDestUser" type="checkbox" checked /> Destination user</label>
         </div>
         <button type="submit">Zarejestruj uczestnika</button>
+      </form>
+      <form id="editParticipant" class="panel">
+        <div class="panel-head"><div><p class="section-label">Edycja</p><h2>Istniejący uczestnik</h2></div></div>
+        <div class="form-grid">
+          <label class="wide"><span class="field-label required">Uczestnik</span><select id="editBic" data-participant-options required></select></label>
+          <label><span class="field-label required">Nazwa</span><input id="editName" required /></label>
+          <label><span class="field-label required">Sort code</span><input id="editSortCode" required pattern="([0-9]{6}|[0-9]{2}-[0-9]{2}-[0-9]{2})" title="Wpisz 6 cyfr, np. 123456 albo 12-34-56" /></label>
+          <label><span class="field-label">Saldo</span><input id="editBalance" type="number" min="0" /></label>
+          <label><span class="field-label">Kod SU</span><input id="editSuCode" /></label>
+          <label><input id="editServiceUser" type="checkbox" /> Service user</label>
+          <label><input id="editDestUser" type="checkbox" /> Destination user</label>
+        </div>
+        <div class="button-row split-actions">
+          <button type="submit">Zapisz zmiany</button>
+          <button id="deleteParticipant" class="danger-button" type="button">Usuń uczestnika</button>
+        </div>
       </form>
       <article class="panel">
         <div class="panel-head"><div><p class="section-label">Kontrola</p><h2>Operacje operatora BACS</h2></div></div>
@@ -90,7 +106,7 @@
     </section>
     <section class="table-grid">
       <article class="panel"><h2>Uczestnicy</h2><div class="table-wrap"><table><thead><tr><th>BIC</th><th>Nazwa</th><th>Sort code</th><th>Status</th><th>Saldo</th><th>Limit</th></tr></thead><tbody id="participantsBody"></tbody></table></div></article>
-      <article class="panel"><h2>Zgłoszenia BACS</h2><div class="table-wrap"><table><thead><tr><th>ID</th><th>SU</th><th>Odbiorca</th><th>Kwota</th><th>Status</th></tr></thead><tbody id="paymentsBody"></tbody></table></div></article>
+      <article class="panel"><h2>Zgłoszenia BACS</h2><div class="table-wrap"><table><thead><tr><th>ID</th><th>SU</th><th>Pozycje</th><th>Kwota</th><th>Status</th></tr></thead><tbody id="paymentsBody"></tbody></table></div></article>
     </section>
     <section class="work-grid"><article class="panel"><h2>Limity systemu</h2><div id="systemLimits" class="info-list">-</div></article><article class="panel"><h2>Harmonogram</h2><div id="systemSchedule" class="info-list">-</div></article></section>
   </main>

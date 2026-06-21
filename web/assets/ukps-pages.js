@@ -266,6 +266,9 @@ function paymentSender(item) {
 }
 
 function paymentReceiver(item) {
+  if (scheme.key === "bacs" && item.total_volume != null) {
+    return `${item.total_volume} pozycji`;
+  }
   const sortCode = item.receiver_sort_code || item.dest_sort_code || "";
   const bic = item.receiver_bic || item.creditor_bic || "";
   return sortCode ? `${bic} (${sortCode})` : bic;
@@ -335,6 +338,8 @@ function renderParticipantOptions(selectedBic) {
       })
       .join("");
   });
+  fillParticipantEditForm();
+  renderBacsRecipientOptions();
 }
 
 function liquidityAlertForParticipant(participant) {
@@ -549,6 +554,7 @@ async function refreshBank() {
     renderLiquidityAlerts(getLiquidityAlerts(participant ? [participant] : []));
     renderPayments(bankPayments);
     renderParticipantOptions(bic);
+    if (scheme.submitKind === "bacs") generateBacsFileFromRows();
     if ($("senderBic")) $("senderBic").value = bic;
     setBusy(false, "Widok banku odświeżony");
   } catch (error) {
@@ -586,6 +592,130 @@ function buildPaymentPayload() {
   };
 }
 
+function bacsRecipientCandidates() {
+  const currentBic = state.user?.bic;
+  const withSortCode = state.participants.filter((participant) => participant.sort_code && participant.bic !== currentBic);
+  const destinationUsers = withSortCode.filter((participant) => participant.is_destination_user);
+  return destinationUsers.length ? destinationUsers : withSortCode;
+}
+
+function renderBacsRecipientOptions() {
+  const selects = document.querySelectorAll("[data-bacs-recipient]");
+  if (!selects.length) return;
+  const participants = bacsRecipientCandidates();
+  const options = participants
+    .map((participant) => `<option value="${escapeHTML(participant.bic)}">${escapeHTML(participant.name || participant.bic)} - ${escapeHTML(participant.sort_code)}</option>`)
+    .join("");
+  selects.forEach((select) => {
+    const previous = select.value;
+    select.innerHTML = options || `<option value="">Brak odbiorców z sort code</option>`;
+    if (previous && participants.some((participant) => participant.bic === previous)) {
+      select.value = previous;
+    }
+  });
+}
+
+function bacsLine(type, values) {
+  const spaces = (n) => " ".repeat(n);
+  const lpad = (value, length) => String(value ?? "").slice(0, length).padStart(length, " ");
+  const rpad = (value, length) => String(value ?? "").slice(0, length).padEnd(length, " ");
+  if (type === "1") {
+    return "1" + lpad(values.volNo, 7) + rpad(values.sortCode, 9) + rpad(values.account, 9) + spaces(29) + lpad(values.totalPence, 11) + lpad(values.totalVolume, 7) + rpad(values.date, 6) + " ";
+  }
+  if (type === "4") {
+    return "4" + lpad(values.volNo, 7) + rpad(values.sortCode, 9) + rpad(values.account, 9) + lpad(values.amountPence, 11) + rpad(values.originatorName, 15) + rpad(values.reference, 14) + rpad(values.suCode, 13) + " ";
+  }
+  if (type === "5") {
+    return "5" + lpad(values.volNo, 7) + spaces(40) + lpad(values.recordCount, 8) + spaces(24);
+  }
+  return "9" + lpad(values.volNo, 7) + spaces(12) + lpad(values.totalPence, 11) + lpad(values.totalVolume, 9) + lpad(values.hashTotal, 14) + spaces(26);
+}
+
+function generateBacsFileFromRows() {
+  const rows = Array.from(document.querySelectorAll(".bacs-payment-row"));
+  if (!rows.length) {
+    $("standard18").value = "";
+    return;
+  }
+  const sender = state.participants.find((participant) => participant.bic === state.user?.bic) || {};
+  const suCode = sender.su_code || "XX1";
+  const originatorName = sender.name || state.user?.bic || "ORIGINATOR";
+  const items = rows
+    .map((row, index) => {
+      const participant = state.participants.find((item) => item.bic === row.querySelector("[data-bacs-recipient]")?.value);
+      const amount = Number(row.querySelector("[data-bacs-amount]")?.value || 0);
+      return {
+        index,
+        participant,
+        account: row.querySelector("[data-bacs-account]")?.value || "01234567",
+        amount,
+        amountPence: Math.round(amount * 100),
+        reference: row.querySelector("[data-bacs-reference]")?.value || `BACS-${index + 1}`,
+      };
+    })
+    .filter((item) => item.participant?.sort_code && item.amountPence > 0);
+  const totalPence = items.reduce((sum, item) => sum + item.amountPence, 0);
+  const hashTotal = items.reduce((sum, item) => sum + Number(normalizeSortCode(item.participant.sort_code).replaceAll("-", "")), 0);
+  const date = new Date().toISOString().slice(2, 10).replaceAll("-", "");
+  const volNo = "1";
+  const lines = [
+    bacsLine("1", { volNo, sortCode: sender.sort_code || items[0]?.participant?.sort_code || "000000", account: "01234567", totalPence, totalVolume: items.length, date }),
+    ...items.map((item) => bacsLine("4", { volNo, sortCode: item.participant.sort_code, account: item.account, amountPence: item.amountPence, originatorName, reference: item.reference, suCode })),
+    bacsLine("5", { volNo, recordCount: items.length }),
+    bacsLine("9", { volNo, totalPence, totalVolume: items.length, hashTotal }),
+  ];
+  $("standard18").value = lines.join("\n");
+}
+
+function addBacsPaymentRow() {
+  const rows = $("bacsPaymentRows");
+  if (!rows) return;
+  const index = rows.querySelectorAll(".bacs-payment-row").length + 1;
+  rows.insertAdjacentHTML("beforeend", `
+    <div class="bacs-payment-row">
+      <label>Odbiorca <select data-bacs-recipient></select></label>
+      <label>Konto <input data-bacs-account value="01234567" maxlength="8" /></label>
+      <label>Kwota <input data-bacs-amount type="number" min="0.01" step="0.01" value="100.00" /></label>
+      <label>Referencja <input data-bacs-reference value="BACS-${String(index).padStart(3, "0")}" maxlength="14" /></label>
+      <button class="secondary-button" data-remove-bacs-payment type="button">Usuń</button>
+    </div>
+  `);
+  renderBacsRecipientOptions();
+  generateBacsFileFromRows();
+}
+
+function selectedEditParticipant() {
+  const bic = $("editBic")?.value;
+  return state.participants.find((participant) => participant.bic === bic) || state.participants[0] || null;
+}
+
+function fillParticipantEditForm() {
+  const participant = selectedEditParticipant();
+  if (!participant) return;
+  if ($("editBic") && $("editBic").value !== participant.bic) $("editBic").value = participant.bic;
+  if ($("editName")) $("editName").value = participant.name || "";
+  if ($("editSortCode")) $("editSortCode").value = participant.sort_code || "";
+  if ($("editBalance")) $("editBalance").value = String(participant.balance ?? 0);
+  if ($("editParticipantType")) $("editParticipantType").value = participant.participant_type || "DIRECT";
+  if ($("editSponsorBic")) $("editSponsorBic").value = participant.sponsor_bic || "";
+  if ($("editSuCode")) $("editSuCode").value = participant.su_code || "";
+  if ($("editServiceUser")) $("editServiceUser").checked = Boolean(participant.is_service_user);
+  if ($("editDestUser")) $("editDestUser").checked = Boolean(participant.is_destination_user);
+}
+
+function buildParticipantProfilePayload(prefix) {
+  return {
+    name: $(`${prefix}Name`).value.trim(),
+    sort_code: normalizeSortCode($(`${prefix}SortCode`)?.value),
+    balance: Number($(`${prefix}Balance`).value),
+    participant_type: $(`${prefix}ParticipantType`)?.value,
+    sponsor_bic: $(`${prefix}SponsorBic`)?.value.trim().toUpperCase(),
+    su_code: $(`${prefix}SuCode`)?.value.trim(),
+    is_service_user: $(`${prefix}ServiceUser`)?.checked,
+    is_destination_user: $(`${prefix}DestUser`)?.checked,
+  };
+}
+
 function standard18Sample() {
   const spaces = (n) => " ".repeat(n);
   const lpad = (value, length) => String(value).padStart(length, " ");
@@ -604,6 +734,7 @@ function standard18Sample() {
 
 function setupOperatorEvents() {
   $("refresh")?.addEventListener("click", refreshOperator);
+  $("editBic")?.addEventListener("change", fillParticipantEditForm);
   $("registerParticipant")?.addEventListener("submit", (event) => {
     event.preventDefault();
     jsonAction("Rejestracja uczestnika", () => api("/v1/participants/register", {
@@ -611,13 +742,25 @@ function setupOperatorEvents() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         bic: $("newBic").value.trim().toUpperCase(),
-        name: $("newName").value.trim(),
-        sort_code: normalizeSortCode($("newSortCode")?.value),
-        balance: Number($("newBalance").value),
-        su_code: $("newSuCode")?.value.trim(),
-        is_service_user: $("newServiceUser")?.checked,
-        is_destination_user: $("newDestUser")?.checked,
+        ...buildParticipantProfilePayload("new"),
       }),
+    }), refreshOperator);
+  });
+  $("editParticipant")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const bic = $("editBic").value;
+    jsonAction("Aktualizacja uczestnika", () => api(`/v1/participants/${encodeURIComponent(bic)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(buildParticipantProfilePayload("edit")),
+    }), refreshOperator);
+  });
+  $("deleteParticipant")?.addEventListener("click", () => {
+    const bic = $("editBic")?.value;
+    if (!bic) return;
+    if (!window.confirm(`Usunąć uczestnika ${bic}? Operacja jest przeznaczona do danych testowych bez historii transakcji.`)) return;
+    jsonAction("Usunięcie uczestnika", () => api(`/v1/participants/${encodeURIComponent(bic)}`, {
+      method: "DELETE",
     }), refreshOperator);
   });
   $("setStatus")?.addEventListener("click", () => jsonAction("Zmiana statusu", () => api(`/v1/participants/${$("opsBic").value}/status`, {
@@ -679,6 +822,18 @@ function setupBankEvents() {
     setBusy(false, "Usunięto API key");
   });
   $("refresh")?.addEventListener("click", refreshBank);
+  $("addBacsPayment")?.addEventListener("click", addBacsPaymentRow);
+  $("generateBacsFile")?.addEventListener("click", generateBacsFileFromRows);
+  $("bacsPaymentRows")?.addEventListener("input", generateBacsFileFromRows);
+  $("bacsPaymentRows")?.addEventListener("change", generateBacsFileFromRows);
+  $("bacsPaymentRows")?.addEventListener("click", (event) => {
+    if (!event.target.matches("[data-remove-bacs-payment]")) return;
+    const row = event.target.closest(".bacs-payment-row");
+    if (row && document.querySelectorAll(".bacs-payment-row").length > 1) {
+      row.remove();
+      generateBacsFileFromRows();
+    }
+  });
   $("paymentForm")?.addEventListener("submit", (event) => {
     event.preventDefault();
     if (scheme.submitKind === "bacs") {
