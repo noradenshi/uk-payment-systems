@@ -358,6 +358,11 @@ button:disabled {
   border-color: var(--danger);
 }
 
+.danger-button:hover {
+  background: #8f1d14;
+  border-color: #8f1d14;
+}
+
 .notice {
   margin: 10px 0;
   padding: 10px 12px;
