@@ -440,6 +440,7 @@ function renderParticipants() {
       return `<tr ${emergency ? 'class="notice bad"' : ""}>
         <td>${p.bic}</td>
         <td>${p.name || ""}</td>
+        <td>${p.sort_code || ""}</td>
         <td>${statusPill(p.status)}</td>
         <td>${money.format(balance)}</td>
         <td>${money.format(limit)}</td>
@@ -611,6 +612,7 @@ function setupOperatorEvents() {
       body: JSON.stringify({
         bic: $("newBic").value.trim().toUpperCase(),
         name: $("newName").value.trim(),
+        sort_code: normalizeSortCode($("newSortCode")?.value),
         balance: Number($("newBalance").value),
         su_code: $("newSuCode")?.value.trim(),
         is_service_user: $("newServiceUser")?.checked,

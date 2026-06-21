@@ -25,6 +25,7 @@
         <div class="form-grid">
           <label>BIC <input id="newBic" value="NEWBACS1" /></label>
           <label>Nazwa <input id="newName" value="New BACS Service User" /></label>
+          <label>Sort code <input id="newSortCode" value="34-56-78" required pattern="[0-9]{2}-?[0-9]{2}-?[0-9]{2}" title="Wpisz 6 cyfr, np. 123456 albo 12-34-56" /></label>
           <label>Saldo początkowe <input id="newBalance" type="number" value="100000" /></label>
           <label>Kod SU <input id="newSuCode" value="123456" /></label>
           <label><input id="newServiceUser" type="checkbox" checked /> Service user</label>
@@ -88,7 +89,7 @@
       </article>
     </section>
     <section class="table-grid">
-      <article class="panel"><h2>Uczestnicy</h2><div class="table-wrap"><table><thead><tr><th>BIC</th><th>Nazwa</th><th>Status</th><th>Saldo</th><th>Limit</th></tr></thead><tbody id="participantsBody"></tbody></table></div></article>
+      <article class="panel"><h2>Uczestnicy</h2><div class="table-wrap"><table><thead><tr><th>BIC</th><th>Nazwa</th><th>Sort code</th><th>Status</th><th>Saldo</th><th>Limit</th></tr></thead><tbody id="participantsBody"></tbody></table></div></article>
       <article class="panel"><h2>Zgłoszenia BACS</h2><div class="table-wrap"><table><thead><tr><th>ID</th><th>SU</th><th>Odbiorca</th><th>Kwota</th><th>Status</th></tr></thead><tbody id="paymentsBody"></tbody></table></div></article>
     </section>
     <section class="work-grid"><article class="panel"><h2>Limity systemu</h2><div id="systemLimits" class="info-list">-</div></article><article class="panel"><h2>Harmonogram</h2><div id="systemSchedule" class="info-list">-</div></article></section>
