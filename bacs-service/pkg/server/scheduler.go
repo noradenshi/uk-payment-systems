@@ -18,15 +18,18 @@ func getDuration(cfg map[string]interface{}, key string, defaultVal float64) tim
 func (s *Server) StartScheduler(ctx context.Context) {
 	cfg := loadGlobalSchedule("bacs")
 
+	mode, _ := cfg["mode"].(string)
 	demoVal, _ := cfg["demo_session_minutes"].(float64)
+	isDemo := mode == "demo" && demoVal > 0
+
 	interval := 60 * time.Second
-	if demoVal > 0 {
+	if isDemo {
 		interval = time.Duration(math.Min(demoVal, 60)) * time.Second
 	}
 
 	processingDuration := getDuration(cfg, "processing_duration_minutes", 1440)
 	settlementDuration := getDuration(cfg, "settlement_duration_minutes", 1440)
-	if demoVal > 0 {
+	if isDemo {
 		demoDur := time.Duration(demoVal) * time.Minute
 		if processingDuration > demoDur {
 			processingDuration = demoDur
@@ -39,7 +42,7 @@ func (s *Server) StartScheduler(ctx context.Context) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	log.Printf("Scheduler started (interval=%v processing=%v settlement=%v)", interval, processingDuration, settlementDuration)
+	log.Printf("Scheduler started (mode=%s interval=%v processing=%v settlement=%v)", mode, interval, processingDuration, settlementDuration)
 
 	for {
 		select {

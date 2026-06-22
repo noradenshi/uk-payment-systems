@@ -491,6 +491,7 @@ func (s *LedgerService) TopUpLiquidity(ctx context.Context, bic string, amount f
 		FROM participant_liquidity l
 		WHERE l.bic_code = st.bic_code AND st.bic_code = $1 AND l.balance >= -st.overdraft_limit`, bic)
 	_, _ = s.ResolveGridlock(ctx)
+	_, _ = s.ResolveBilateralGridlock(ctx)
 	return nil
 }
 
@@ -516,6 +517,7 @@ func (s *LedgerService) SettlePayment(ctx context.Context, msgID string, sender 
 	}
 	if result.Status == "PDNG" {
 		s.ResolveGridlock(ctx)
+		s.ResolveBilateralGridlock(ctx)
 		result, err = s.settlePaymentOnce(ctx, msgID, sender, receiver, amount, endToEndID, senderSortCode, receiverSortCode, klikSessionID)
 	}
 	return result, err
@@ -713,6 +715,123 @@ func (s *LedgerService) ResolveGridlock(ctx context.Context) (int, error) {
 			return settled, err
 		}
 	}
+}
+
+func (s *LedgerService) ResolveBilateralGridlock(ctx context.Context) (int, error) {
+	resolved := 0
+	err := pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT t1.sender_bic, t1.receiver_bic
+			FROM transactions t1
+			WHERE t1.status = 'QUEUED'
+			  AND EXISTS (
+			    SELECT 1 FROM transactions t2
+			    WHERE t2.status = 'QUEUED'
+			      AND t2.sender_bic = t1.receiver_bic
+			      AND t2.receiver_bic = t1.sender_bic
+			  )
+			  AND t1.sender_bic < t1.receiver_bic
+			GROUP BY t1.sender_bic, t1.receiver_bic
+			FOR UPDATE`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		type pair struct {
+			bicA string
+			bicB string
+		}
+		var pairs []pair
+		for rows.Next() {
+			var p pair
+			if err := rows.Scan(&p.bicA, &p.bicB); err != nil {
+				return err
+			}
+			pairs = append(pairs, p)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		rows.Close()
+
+		for _, p := range pairs {
+			var aToB, bToA float64
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(SUM(amount),0) FROM transactions WHERE sender_bic=$1 AND receiver_bic=$2 AND status='QUEUED'`, p.bicA, p.bicB).Scan(&aToB); err != nil {
+				return err
+			}
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(SUM(amount),0) FROM transactions WHERE sender_bic=$1 AND receiver_bic=$2 AND status='QUEUED'`, p.bicB, p.bicA).Scan(&bToA); err != nil {
+				return err
+			}
+			if aToB <= 0 || bToA <= 0 {
+				continue
+			}
+
+			var balA, earmA, limA float64
+			var balB, earmB, limB float64
+			if err := tx.QueryRow(ctx, `
+				SELECT l.balance, COALESCE(l.earmarked,0), COALESCE(st.overdraft_limit,0)
+				FROM participant_liquidity l
+				JOIN participant_statuses st ON st.bic_code = l.bic_code
+				WHERE l.bic_code=$1 AND st.status='ACTIVE'
+				FOR UPDATE OF l, st`, p.bicA).Scan(&balA, &earmA, &limA); err != nil {
+				continue
+			}
+			if err := tx.QueryRow(ctx, `
+				SELECT l.balance, COALESCE(l.earmarked,0), COALESCE(st.overdraft_limit,0)
+				FROM participant_liquidity l
+				JOIN participant_statuses st ON st.bic_code = l.bic_code
+				WHERE l.bic_code=$1 AND st.status='ACTIVE'
+				FOR UPDATE OF l, st`, p.bicB).Scan(&balB, &earmB, &limB); err != nil {
+				continue
+			}
+
+			if aToB >= bToA {
+				net := aToB - bToA
+				// A is net debtor. Check: balance_A - earmarked_A + b_to_a + overdraft_A >= 0
+				if balA-earmA+bToA+limA < 0 {
+					continue
+				}
+				if _, err := tx.Exec(ctx, `UPDATE participant_liquidity SET earmarked=earmarked-$1, balance=balance-$2, updated_at=NOW() WHERE bic_code=$3`, aToB, net, p.bicA); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, `UPDATE participant_liquidity SET earmarked=earmarked-$1, balance=balance+$2, updated_at=NOW() WHERE bic_code=$3`, bToA, net, p.bicB); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, `UPDATE transactions SET status='SETTLED' WHERE status='QUEUED' AND ((sender_bic=$1 AND receiver_bic=$2) OR (sender_bic=$2 AND receiver_bic=$1))`, p.bicA, p.bicB); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, `
+					INSERT INTO journal_entries (transaction_id, account_bic, amount)
+					VALUES (NULL, $1, $2), (NULL, $3, $4)`, p.bicA, -net, p.bicB, net); err != nil {
+					return err
+				}
+			} else {
+				net := bToA - aToB
+				// B is net debtor. Check: balance_B - earmarked_B + a_to_b + overdraft_B >= 0
+				if balB-earmB+aToB+limB < 0 {
+					continue
+				}
+				if _, err := tx.Exec(ctx, `UPDATE participant_liquidity SET earmarked=earmarked-$1, balance=balance-$2, updated_at=NOW() WHERE bic_code=$3`, bToA, net, p.bicB); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, `UPDATE participant_liquidity SET earmarked=earmarked-$1, balance=balance+$2, updated_at=NOW() WHERE bic_code=$3`, aToB, net, p.bicA); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, `UPDATE transactions SET status='SETTLED' WHERE status='QUEUED' AND ((sender_bic=$1 AND receiver_bic=$2) OR (sender_bic=$2 AND receiver_bic=$1))`, p.bicA, p.bicB); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, `
+					INSERT INTO journal_entries (transaction_id, account_bic, amount)
+					VALUES (NULL, $1, $2), (NULL, $3, $4)`, p.bicB, -net, p.bicA, net); err != nil {
+					return err
+				}
+			}
+			resolved += 2
+		}
+		return nil
+	})
+	return resolved, err
 }
 
 func (s *LedgerService) EnforceRealtimeLiquidityBlocks(ctx context.Context) error {
