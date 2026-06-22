@@ -193,12 +193,12 @@ func (s *LedgerService) UnblockParticipant(ctx context.Context, bic string) erro
 }
 
 func (s *LedgerService) GetPosition(ctx context.Context, bic string) (map[string]interface{}, error) {
-	var balance float64
-	err := s.Pool.QueryRow(ctx, "SELECT balance FROM participant_liquidity WHERE bic_code = $1", bic).Scan(&balance)
+	var balance, earmarked float64
+	err := s.Pool.QueryRow(ctx, "SELECT balance, COALESCE(earmarked,0) FROM participant_liquidity WHERE bic_code = $1", bic).Scan(&balance, &earmarked)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"bic": bic, "balance": balance, "available": balance, "earmarked": 0}, nil
+	return map[string]interface{}{"bic": bic, "balance": balance, "available": balance - earmarked, "earmarked": earmarked}, nil
 }
 
 func (s *LedgerService) SettleSIP(ctx context.Context, msgID, sender, receiver string, amount float64, endToEndID string, senderSortCode, receiverSortCode, senderAccount, receiverAccount string) (SettlementResult, error) {
@@ -208,6 +208,7 @@ func (s *LedgerService) SettleSIP(ctx context.Context, msgID, sender, receiver s
 	}
 	if result.Status == "PDNG" {
 		s.ResolveGridlock(ctx)
+		s.ResolveBilateralGridlock(ctx)
 		result, err = s.settleSIPOnce(ctx, msgID, sender, receiver, amount, endToEndID, senderSortCode, receiverSortCode, senderAccount, receiverAccount)
 	}
 	return result, err
@@ -267,18 +268,20 @@ func (s *LedgerService) settleSIPOnce(ctx context.Context, msgID, sender, receiv
 			tx.Exec(ctx, "UPDATE fps_transactions SET status='REJECTED' WHERE id=$1", internalUUID)
 			return nil
 		}
-		var balance, overdraftLimit float64
+		var balance, earmarked, overdraftLimit float64
 		err = tx.QueryRow(ctx, `
-			SELECT l.balance, COALESCE(st.overdraft_limit,0)
+			SELECT l.balance, COALESCE(l.earmarked,0), COALESCE(st.overdraft_limit,0)
 			FROM participant_liquidity l
 			JOIN participant_statuses st ON st.bic_code = l.bic_code
-			WHERE l.bic_code = $1 FOR UPDATE OF l, st`, sender).Scan(&balance, &overdraftLimit)
+			WHERE l.bic_code = $1 FOR UPDATE OF l, st`, sender).Scan(&balance, &earmarked, &overdraftLimit)
 		if err != nil {
 			return err
 		}
-		if balance-amount < -overdraftLimit {
+		available := balance - earmarked
+		if available-amount < -overdraftLimit {
 			result = SettlementResult{Status: "PDNG", ReasonCode: "INSU"}
 			tx.Exec(ctx, "UPDATE fps_transactions SET status='QUEUED' WHERE id=$1", internalUUID)
+			tx.Exec(ctx, `UPDATE participant_liquidity SET earmarked=earmarked+$1 WHERE bic_code=$2`, amount, sender)
 			tx.Exec(ctx, `
 				UPDATE participant_statuses
 				SET liquidity_breach_at=COALESCE(liquidity_breach_at, NOW()), updated_at=NOW()
@@ -521,6 +524,7 @@ func (s *LedgerService) TopUpLiquidity(ctx context.Context, bic string, amount f
 		FROM participant_liquidity l
 		WHERE l.bic_code = st.bic_code AND st.bic_code = $1 AND l.balance >= -st.overdraft_limit`, bic)
 	_, _ = s.ResolveGridlock(ctx)
+	_, _ = s.ResolveBilateralGridlock(ctx)
 	return nil
 }
 
@@ -530,13 +534,13 @@ func (s *LedgerService) GetFPSLimits(ctx context.Context, bic string) (map[strin
 	s.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(balance),0) FROM participant_liquidity").Scan(&totalLiquidity)
 	result["total_available_liquidity"] = totalLiquidity
 	if bic != "" {
-		var bal float64
+		var bal, earmarked float64
 		s.Pool.QueryRow(ctx, `
-			SELECT l.balance + COALESCE(st.overdraft_limit,0)
+			SELECT l.balance + COALESCE(st.overdraft_limit,0), COALESCE(l.earmarked,0)
 			FROM participant_liquidity l
 			LEFT JOIN participant_statuses st ON st.bic_code=l.bic_code
-			WHERE l.bic_code=$1`, bic).Scan(&bal)
-		result["remaining_intraday_liquidity"] = bal
+			WHERE l.bic_code=$1`, bic).Scan(&bal, &earmarked)
+		result["remaining_intraday_liquidity"] = bal - earmarked
 	} else {
 		result["remaining_intraday_liquidity"] = totalLiquidity
 	}
@@ -565,22 +569,23 @@ func (s *LedgerService) ResolveGridlock(ctx context.Context) (int, error) {
 				if err := rows.Scan(&id, &sender, &receiver, &amount); err != nil {
 					return err
 				}
-				var senderBalance, overdraftLimit float64
+				var senderBalance, senderEarmarked, overdraftLimit float64
 				if err := tx.QueryRow(ctx, `
-					SELECT l.balance, COALESCE(st.overdraft_limit,0)
+					SELECT l.balance, COALESCE(l.earmarked,0), COALESCE(st.overdraft_limit,0)
 					FROM participant_liquidity l
 					JOIN participant_statuses st ON st.bic_code = l.bic_code
 					WHERE l.bic_code=$1 AND st.status='ACTIVE'
-					FOR UPDATE OF l, st`, sender).Scan(&senderBalance, &overdraftLimit); err != nil {
+					FOR UPDATE OF l, st`, sender).Scan(&senderBalance, &senderEarmarked, &overdraftLimit); err != nil {
 					continue
 				}
-				if senderBalance-amount < -overdraftLimit {
+				effectiveAvailable := senderBalance - (senderEarmarked - amount)
+				if effectiveAvailable-amount < -overdraftLimit {
 					continue
 				}
 				if _, err := tx.Exec(ctx, `SELECT balance FROM participant_liquidity WHERE bic_code=$1 FOR UPDATE`, receiver); err != nil {
 					continue
 				}
-				if _, err := tx.Exec(ctx, `UPDATE participant_liquidity SET balance=balance-$1, updated_at=NOW() WHERE bic_code=$2`, amount, sender); err != nil {
+				if _, err := tx.Exec(ctx, `UPDATE participant_liquidity SET earmarked=earmarked-$1, balance=balance-$1, updated_at=NOW() WHERE bic_code=$2`, amount, sender); err != nil {
 					return err
 				}
 				if _, err := tx.Exec(ctx, `UPDATE participant_liquidity SET balance=balance+$1, updated_at=NOW() WHERE bic_code=$2`, amount, receiver); err != nil {
@@ -601,6 +606,121 @@ func (s *LedgerService) ResolveGridlock(ctx context.Context) (int, error) {
 			return settled, err
 		}
 	}
+}
+
+func (s *LedgerService) ResolveBilateralGridlock(ctx context.Context) (int, error) {
+	resolved := 0
+	err := pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT t1.sender_bic, t1.receiver_bic
+			FROM fps_transactions t1
+			WHERE t1.status = 'QUEUED'
+			  AND EXISTS (
+			    SELECT 1 FROM fps_transactions t2
+			    WHERE t2.status = 'QUEUED'
+			      AND t2.sender_bic = t1.receiver_bic
+			      AND t2.receiver_bic = t1.sender_bic
+			  )
+			  AND t1.sender_bic < t1.receiver_bic
+			GROUP BY t1.sender_bic, t1.receiver_bic
+			FOR UPDATE`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		type pair struct {
+			bicA string
+			bicB string
+		}
+		var pairs []pair
+		for rows.Next() {
+			var p pair
+			if err := rows.Scan(&p.bicA, &p.bicB); err != nil {
+				return err
+			}
+			pairs = append(pairs, p)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		rows.Close()
+
+		for _, p := range pairs {
+			var aToB, bToA float64
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(SUM(amount),0) FROM fps_transactions WHERE sender_bic=$1 AND receiver_bic=$2 AND status='QUEUED'`, p.bicA, p.bicB).Scan(&aToB); err != nil {
+				return err
+			}
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(SUM(amount),0) FROM fps_transactions WHERE sender_bic=$1 AND receiver_bic=$2 AND status='QUEUED'`, p.bicB, p.bicA).Scan(&bToA); err != nil {
+				return err
+			}
+			if aToB <= 0 || bToA <= 0 {
+				continue
+			}
+
+			var balA, earmA, limA float64
+			var balB, earmB, limB float64
+			if err := tx.QueryRow(ctx, `
+				SELECT l.balance, COALESCE(l.earmarked,0), COALESCE(st.overdraft_limit,0)
+				FROM participant_liquidity l
+				JOIN participant_statuses st ON st.bic_code = l.bic_code
+				WHERE l.bic_code=$1 AND st.status='ACTIVE'
+				FOR UPDATE OF l, st`, p.bicA).Scan(&balA, &earmA, &limA); err != nil {
+				continue
+			}
+			if err := tx.QueryRow(ctx, `
+				SELECT l.balance, COALESCE(l.earmarked,0), COALESCE(st.overdraft_limit,0)
+				FROM participant_liquidity l
+				JOIN participant_statuses st ON st.bic_code = l.bic_code
+				WHERE l.bic_code=$1 AND st.status='ACTIVE'
+				FOR UPDATE OF l, st`, p.bicB).Scan(&balB, &earmB, &limB); err != nil {
+				continue
+			}
+
+			if aToB >= bToA {
+				net := aToB - bToA
+				if balA-earmA+bToA+limA < 0 {
+					continue
+				}
+				if _, err := tx.Exec(ctx, `UPDATE participant_liquidity SET earmarked=earmarked-$1, balance=balance-$2, updated_at=NOW() WHERE bic_code=$3`, aToB, net, p.bicA); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, `UPDATE participant_liquidity SET earmarked=earmarked-$1, balance=balance+$2, updated_at=NOW() WHERE bic_code=$3`, bToA, net, p.bicB); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, `UPDATE fps_transactions SET status='SETTLED' WHERE status='QUEUED' AND ((sender_bic=$1 AND receiver_bic=$2) OR (sender_bic=$2 AND receiver_bic=$1))`, p.bicA, p.bicB); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, `
+					INSERT INTO fps_journal_entries (transaction_id, account_bic, amount)
+					VALUES (NULL, $1, $2), (NULL, $3, $4)`, p.bicA, -net, p.bicB, net); err != nil {
+					return err
+				}
+			} else {
+				net := bToA - aToB
+				if balB-earmB+aToB+limB < 0 {
+					continue
+				}
+				if _, err := tx.Exec(ctx, `UPDATE participant_liquidity SET earmarked=earmarked-$1, balance=balance-$2, updated_at=NOW() WHERE bic_code=$3`, bToA, net, p.bicB); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, `UPDATE participant_liquidity SET earmarked=earmarked-$1, balance=balance+$2, updated_at=NOW() WHERE bic_code=$3`, aToB, net, p.bicA); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, `UPDATE fps_transactions SET status='SETTLED' WHERE status='QUEUED' AND ((sender_bic=$1 AND receiver_bic=$2) OR (sender_bic=$2 AND receiver_bic=$1))`, p.bicA, p.bicB); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, `
+					INSERT INTO fps_journal_entries (transaction_id, account_bic, amount)
+					VALUES (NULL, $1, $2), (NULL, $3, $4)`, p.bicB, -net, p.bicA, net); err != nil {
+					return err
+				}
+			}
+			resolved += 2
+		}
+		return nil
+	})
+	return resolved, err
 }
 
 func (s *LedgerService) EnforceRealtimeLiquidityBlocks(ctx context.Context) error {
@@ -701,8 +821,30 @@ func (s *LedgerService) GetPaymentDetails(ctx context.Context, msgID string) (ma
 }
 
 func (s *LedgerService) RecallPayment(ctx context.Context, msgID string) (bool, error) {
-	tag, err := s.Pool.Exec(ctx, "UPDATE fps_transactions SET status='REJECTED' WHERE msg_id=$1 AND (status='PENDING' OR status='QUEUED')", msgID)
-	return tag.RowsAffected() > 0, err
+	released := false
+	err := pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+		var senderBic string
+		var amount float64
+		err := tx.QueryRow(ctx, `
+			UPDATE fps_transactions SET status='REJECTED'
+			WHERE msg_id=$1 AND (status='PENDING' OR status='QUEUED')
+			RETURNING sender_bic, amount`, msgID).Scan(&senderBic, &amount)
+		if err == pgx.ErrNoRows {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if amount > 0 {
+			_, err = tx.Exec(ctx, `UPDATE participant_liquidity SET earmarked=GREATEST(0, earmarked-$1) WHERE bic_code=$2`, amount, senderBic)
+			if err != nil {
+				return err
+			}
+		}
+		released = true
+		return nil
+	})
+	return released, err
 }
 
 func (s *LedgerService) ExecuteForwardDated(ctx context.Context) error {
