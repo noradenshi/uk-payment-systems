@@ -675,7 +675,7 @@ func (s *Server) handleGetBlockDetails(w http.ResponseWriter, r *http.Request) {
 	}
 	details, err := s.Ledger.GetBlockDetails(r.Context(), bic)
 	if err != nil {
-		if strings.Contains(err.Error(), "no rows") {
+		if errors.Is(err, ledger.ErrParticipantNotFound) {
 			http.Error(w, "Participant not found", http.StatusNotFound)
 			return
 		}

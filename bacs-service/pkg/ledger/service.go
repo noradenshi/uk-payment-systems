@@ -24,6 +24,7 @@ func NewLedgerService(pool *pgxpool.Pool) *LedgerService {
 var ErrAccountNotFound = errors.New("account not found")
 var ErrInsufficientFunds = errors.New("insufficient funds")
 var ErrParticipantInUse = errors.New("participant has related records")
+var ErrParticipantNotFound = errors.New("participant not found")
 
 // ── Participant operations ──
 
@@ -225,6 +226,9 @@ func (s *LedgerService) GetBlockDetails(ctx context.Context, bic string) (map[st
 		SELECT status::text, blocked_at, block_reason
 		FROM participant_statuses WHERE bic_code = $1`, bic).Scan(&status, &blockedAt, &reason)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrParticipantNotFound
+		}
 		return nil, err
 	}
 	m := map[string]interface{}{
@@ -1101,7 +1105,9 @@ func (s *LedgerService) GetNettingReport(ctx context.Context, cycleDate, bic str
 
 func (s *LedgerService) GetBACSLimits(ctx context.Context) (map[string]interface{}, error) {
 	var totalLiquidity float64
-	s.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(balance),0) FROM participant_liquidity`).Scan(&totalLiquidity)
+	if err := s.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(balance),0) FROM participant_liquidity`).Scan(&totalLiquidity); err != nil {
+		return nil, err
+	}
 	return map[string]interface{}{
 		"max_file_size":              1000000,
 		"max_transactions_per_file":  100000,
@@ -1110,6 +1116,20 @@ func (s *LedgerService) GetBACSLimits(ctx context.Context) (map[string]interface
 		"settlement_cycle":           "T+2",
 		"currency":                   "GBP",
 	}, nil
+}
+
+func (s *LedgerService) EnforceRealtimeLiquidityBlocks(ctx context.Context) error {
+	_, err := s.Pool.Exec(ctx, `
+		UPDATE participant_statuses st
+		SET status='SUSPENDED', block_reason='LIQUIDITY_LIMIT_EXCEEDED_2H',
+		    blocked_at=COALESCE(blocked_at, NOW()), updated_at=NOW()
+		FROM participant_liquidity l
+		WHERE l.bic_code = st.bic_code
+		  AND st.status='ACTIVE'
+		  AND st.liquidity_breach_at IS NOT NULL
+		  AND st.liquidity_breach_at <= NOW() - INTERVAL '2 hours'
+		  AND l.balance < -st.overdraft_limit`)
+	return err
 }
 
 func (s *LedgerService) UpdateOverdraftLimit(ctx context.Context, bic string, limit float64) error {

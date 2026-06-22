@@ -372,7 +372,7 @@ func (s *Server) handleGetBlock(w http.ResponseWriter, r *http.Request) {
 
 	details, err := s.Ledger.GetBlockDetails(r.Context(), bic)
 	if err != nil {
-		if strings.Contains(err.Error(), "no rows") {
+		if errors.Is(err, ledger.ErrParticipantNotFound) {
 			http.Error(w, "Participant not found", http.StatusNotFound)
 			return
 		}
@@ -605,7 +605,7 @@ func (s *Server) processXMLPayment(w http.ResponseWriter, r *http.Request) {
 				"msg_id":           msg.MsgId,
 				"sender":           msg.Sender,
 				"receiver":         msg.DestBIC,
-				"receiver_sort":    msg.DestSortCode,
+				"receiver_sort_code": msg.DestSortCode,
 				"receiver_account": msg.DestAccount,
 				"amount":           msg.Amount,
 				"status":           "SETTLED",
@@ -646,6 +646,10 @@ func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.ReceiverSortCode == "" {
 		badRequest(w, "receiver_sort_code is required")
+		return
+	}
+	if req.ReceiverAccount == "" {
+		badRequest(w, "receiver_account is required")
 		return
 	}
 	if len(req.MsgID) > 35 {
@@ -691,7 +695,7 @@ func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 				"msg_id":           req.MsgID,
 				"sender":           senderBic,
 				"receiver":         req.ReceiverBIC,
-				"receiver_sort":    req.ReceiverSortCode,
+				"receiver_sort_code": req.ReceiverSortCode,
 				"receiver_account": req.ReceiverAccount,
 				"amount":           req.Amount,
 				"status":           "SETTLED",
@@ -790,15 +794,38 @@ func (s *Server) handleAuthorizePayment(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if details["status"] != "PENDING" && details["status"] != "QUEUED" {
+	status, _ := details["status"].(string)
+	if status != "PENDING" && status != "QUEUED" {
 		http.Error(w, "Only pending or queued payments can be authorized", http.StatusConflict)
 		return
 	}
 
+	sender, _ := details["sender_bic"].(string)
+	receiver, _ := details["receiver_bic"].(string)
+	amount, _ := details["amount"].(float64)
+	endToEndID, _ := details["end_to_end_id"].(string)
+	senderSortCode, _ := details["sender_sort_code"].(string)
+	receiverSortCode, _ := details["receiver_sort_code"].(string)
+
+	result, err := s.Ledger.SettlePayment(r.Context(), msgID, sender, receiver, amount, endToEndID, senderSortCode, receiverSortCode, "")
+	if err != nil {
+		log.Printf("AuthorizePayment settle error: %v", err)
+		http.Error(w, "Authorization failed", http.StatusInternalServerError)
+		return
+	}
+
+	respStatus := "AUTHORIZED"
+	if result.Status == "ACTC" {
+		respStatus = "SETTLED"
+	} else if result.Status == "RJCT" {
+		respStatus = "REJECTED"
+	} else if result.Status == "PDNG" {
+		respStatus = "QUEUED"
+	}
+
 	writeJSON(w, http.StatusOK, map[string]string{
-		"msg_id":        msgID,
-		"status":        "AUTHORIZED",
-		"authorized_at": time.Now().UTC().Format(time.RFC3339),
+		"msg_id":  msgID,
+		"status":  respStatus,
 	})
 }
 

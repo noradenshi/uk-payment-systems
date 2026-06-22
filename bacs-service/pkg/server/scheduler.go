@@ -53,6 +53,9 @@ func (s *Server) StartScheduler(ctx context.Context) {
 			if err := s.Ledger.AdvanceCycles(ctx, processingDuration, settlementDuration); err != nil {
 				log.Printf("Scheduler advance cycles: %v", err)
 			}
+			if err := s.Ledger.EnforceRealtimeLiquidityBlocks(ctx); err != nil {
+				log.Printf("Scheduler enforce liquidity blocks: %v", err)
+			}
 			if n, err := s.Ledger.ExecuteMandates(ctx); err != nil {
 				log.Printf("Scheduler execute mandates: %v", err)
 			} else if n > 0 {

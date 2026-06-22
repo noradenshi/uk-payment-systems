@@ -44,6 +44,9 @@ func (s *Server) runScheduledTasks(ctx context.Context, cfg map[string]interface
 	if err := s.Ledger.ExecuteStandingOrders(ctx); err != nil {
 		log.Printf("Scheduler standing orders: %v", err)
 	}
+	if err := s.Ledger.EnforceRealtimeLiquidityBlocks(ctx); err != nil {
+		log.Printf("Scheduler enforce liquidity blocks: %v", err)
+	}
 	s.manageDNSCycles(ctx, cfg)
 }
 

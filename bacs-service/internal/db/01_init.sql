@@ -33,9 +33,9 @@ CREATE TABLE participant_statuses (
 CREATE TYPE cycle_status AS ENUM ('OPEN', 'PROCESSING', 'AWAITING_SETTLEMENT', 'SETTLED', 'PARTIALLY_SETTLED');
 CREATE TABLE bacs_cycles (
     id SERIAL PRIMARY KEY,
-    input_date DATE NOT NULL,
-    processing_date DATE NOT NULL,
-    settlement_date DATE NOT NULL,
+    input_date TIMESTAMPTZ NOT NULL,
+    processing_date TIMESTAMPTZ NOT NULL,
+    settlement_date TIMESTAMPTZ NOT NULL,
     status cycle_status DEFAULT 'OPEN',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );

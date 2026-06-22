@@ -31,6 +31,14 @@ CREATE TABLE participant_statuses (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+CREATE TABLE fps_dns_cycles (
+    id SERIAL PRIMARY KEY,
+    cycle_start TIMESTAMPTZ NOT NULL,
+    cycle_end TIMESTAMPTZ NOT NULL,
+    settled_at TIMESTAMPTZ,
+    status VARCHAR(20) DEFAULT 'OPEN'
+);
+
 CREATE TABLE fps_transactions (
     id UUID PRIMARY KEY DEFAULT uuidv7(),
     msg_id VARCHAR(35) UNIQUE NOT NULL,
@@ -52,7 +60,7 @@ CREATE TABLE fps_forward_dated (
     sender_bic VARCHAR(11) REFERENCES participant_profiles(bic_code) ON DELETE RESTRICT,
     receiver_bic VARCHAR(11) REFERENCES participant_profiles(bic_code) ON DELETE RESTRICT,
     amount DECIMAL(20, 2) NOT NULL,
-    execution_date DATE NOT NULL,
+    execution_date TIMESTAMPTZ NOT NULL,
     status VARCHAR(20) DEFAULT 'SCHEDULED',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -64,8 +72,8 @@ CREATE TABLE fps_standing_orders (
     receiver_bic VARCHAR(11) REFERENCES participant_profiles(bic_code) ON DELETE RESTRICT,
     amount DECIMAL(20, 2) NOT NULL,
     frequency VARCHAR(10) NOT NULL,
-    next_date DATE NOT NULL,
-    end_date DATE,
+    next_date TIMESTAMPTZ NOT NULL,
+    end_date TIMESTAMPTZ,
     status VARCHAR(20) DEFAULT 'ACTIVE',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -78,14 +86,6 @@ CREATE TABLE fps_bulk_submissions (
     total_value DECIMAL(20, 2) NOT NULL,
     status VARCHAR(20) DEFAULT 'RECEIVED',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
-CREATE TABLE fps_dns_cycles (
-    id SERIAL PRIMARY KEY,
-    cycle_start TIMESTAMPTZ NOT NULL,
-    cycle_end TIMESTAMPTZ NOT NULL,
-    settled_at TIMESTAMPTZ,
-    status VARCHAR(20) DEFAULT 'OPEN'
 );
 
 CREATE TABLE fps_journal_entries (

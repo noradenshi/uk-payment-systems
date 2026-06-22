@@ -27,6 +27,7 @@ const fpsDailyParticipantLimit = 10000000.00
 
 var ErrParticipantInUse = errors.New("participant has related records")
 var ErrAccountNotFound = errors.New("account not found")
+var ErrParticipantNotFound = errors.New("participant not found")
 
 type SettlementResult struct {
 	Status     string
@@ -178,6 +179,9 @@ func (s *LedgerService) GetBlockDetails(ctx context.Context, bic string) (map[st
 	var reason *string
 	err := s.Pool.QueryRow(ctx, "SELECT status::text, blocked_at, block_reason FROM participant_statuses WHERE bic_code = $1", bic).Scan(&status, &blockedAt, &reason)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrParticipantNotFound
+		}
 		return nil, err
 	}
 	return map[string]interface{}{"bic": bic, "status": status, "blocked_at": blockedAt, "reason": reason}, nil
@@ -255,7 +259,9 @@ func (s *LedgerService) settleSIPOnce(ctx context.Context, msgID, sender, receiv
 			}
 		}
 		var dayTotal float64
-		tx.QueryRow(ctx, "SELECT COALESCE(SUM(amount),0) FROM fps_transactions WHERE sender_bic=$1 AND status='SETTLED' AND created_at>=CURRENT_DATE", sender).Scan(&dayTotal)
+		if err := tx.QueryRow(ctx, "SELECT COALESCE(SUM(amount),0) FROM fps_transactions WHERE sender_bic=$1 AND status='SETTLED' AND created_at>=CURRENT_DATE", sender).Scan(&dayTotal); err != nil {
+			return err
+		}
 		if dayTotal+amount > fpsDailyParticipantLimit {
 			result = SettlementResult{Status: "RJCT", ReasonCode: "AM05"}
 			tx.Exec(ctx, "UPDATE fps_transactions SET status='REJECTED' WHERE id=$1", internalUUID)
@@ -437,9 +443,12 @@ func (s *LedgerService) CloseDNSCycle(ctx context.Context) ([]map[string]interfa
 		}
 
 		rows, err := tx.Query(ctx, `
-			SELECT bic_code, COALESCE(SUM(CASE WHEN bic_code = sender_bic THEN -amount WHEN bic_code = receiver_bic THEN amount ELSE 0 END), 0) AS net
-			FROM fps_transactions, participant_profiles
-			WHERE (sender_bic = bic_code OR receiver_bic = bic_code) AND status = 'QUEUED' AND cycle_id = $1
+			SELECT bic_code, SUM(amount) AS net
+			FROM (
+				SELECT sender_bic AS bic_code, -amount AS amount FROM fps_transactions WHERE status='QUEUED' AND cycle_id=$1
+				UNION ALL
+				SELECT receiver_bic AS bic_code, amount FROM fps_transactions WHERE status='QUEUED' AND cycle_id=$1
+			) sub
 			GROUP BY bic_code`, cycleID)
 		if err != nil {
 			return err
@@ -663,15 +672,23 @@ func (s *LedgerService) GetPaymentDetails(ctx context.Context, msgID string) (ma
 	if err != nil {
 		return nil, err
 	}
-	rows, _ := s.Pool.Query(ctx, "SELECT account_bic, amount FROM fps_journal_entries WHERE transaction_id=$1::uuid", id)
+	rows, err := s.Pool.Query(ctx, "SELECT account_bic, amount FROM fps_journal_entries WHERE transaction_id=$1::uuid", id)
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	var journal []map[string]interface{}
 	for rows.Next() {
 		var bic string
 		var amt float64
-		if err := rows.Scan(&bic, &amt); err == nil {
-			journal = append(journal, map[string]interface{}{"bic": bic, "amount": amt})
+		if err := rows.Scan(&bic, &amt); err != nil {
+			log.Printf("GetPaymentDetails journal scan: %v", err)
+			continue
 		}
+		journal = append(journal, map[string]interface{}{"bic": bic, "amount": amt})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	result := map[string]interface{}{"msg_id": msgID, "sender_bic": sender, "receiver_bic": receiver, "amount": amount, "status": status, "end_to_end_id": endToEndID, "payment_type": pType, "created_at": createdAt, "audit_trail": journal}
 	if senderSortCode != nil {
@@ -684,12 +701,12 @@ func (s *LedgerService) GetPaymentDetails(ctx context.Context, msgID string) (ma
 }
 
 func (s *LedgerService) RecallPayment(ctx context.Context, msgID string) (bool, error) {
-	tag, err := s.Pool.Exec(ctx, "UPDATE fps_transactions SET status='REJECTED' WHERE msg_id=$1 AND status='PENDING'", msgID)
+	tag, err := s.Pool.Exec(ctx, "UPDATE fps_transactions SET status='REJECTED' WHERE msg_id=$1 AND (status='PENDING' OR status='QUEUED')", msgID)
 	return tag.RowsAffected() > 0, err
 }
 
 func (s *LedgerService) ExecuteForwardDated(ctx context.Context) error {
-	rows, err := s.Pool.Query(ctx, `SELECT id::text, msg_id, sender_bic, receiver_bic, amount FROM fps_forward_dated WHERE status='SCHEDULED' AND execution_date <= CURRENT_DATE LIMIT 50`)
+	rows, err := s.Pool.Query(ctx, `SELECT id::text, msg_id, sender_bic, receiver_bic, amount FROM fps_forward_dated WHERE status='SCHEDULED' AND execution_date <= NOW() LIMIT 50`)
 	if err != nil {
 		return fmt.Errorf("query forward-dated: %w", err)
 	}
@@ -719,7 +736,7 @@ func (s *LedgerService) ExecuteForwardDated(ctx context.Context) error {
 }
 
 func (s *LedgerService) ExecuteStandingOrders(ctx context.Context) error {
-	rows, err := s.Pool.Query(ctx, `SELECT id::text, reference, sender_bic, receiver_bic, amount, frequency, next_date FROM fps_standing_orders WHERE status='ACTIVE' AND next_date <= CURRENT_DATE LIMIT 50`)
+	rows, err := s.Pool.Query(ctx, `SELECT id::text, reference, sender_bic, receiver_bic, amount, frequency, next_date FROM fps_standing_orders WHERE status='ACTIVE' AND next_date <= NOW() LIMIT 50`)
 	if err != nil {
 		return fmt.Errorf("query standing orders: %w", err)
 	}

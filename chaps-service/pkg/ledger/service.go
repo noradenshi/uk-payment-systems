@@ -26,6 +26,7 @@ var ErrAccountNotFound = errors.New("account not found")
 var ErrAccountClosed = errors.New("account closed")
 var ErrSanctionsBlock = errors.New("sanctions block")
 var ErrParticipantInUse = errors.New("participant has related records")
+var ErrParticipantNotFound = errors.New("participant not found")
 
 const singlePaymentLimit = 20000000.00
 const dailyParticipantLimit = 100000000.00
@@ -284,6 +285,13 @@ func (s *LedgerService) CancelPayment(ctx context.Context, msgID string) (bool, 
 			}
 		}
 
+		_, err = tx.Exec(ctx, `
+			INSERT INTO journal_entries (transaction_id, account_bic, amount)
+			VALUES ($1, $2, 0)`, id, senderBic)
+		if err != nil {
+			return err
+		}
+
 		released = true
 		return nil
 	})
@@ -331,6 +339,9 @@ func (s *LedgerService) GetBlockDetails(ctx context.Context, bic string) (map[st
 		FROM participant_statuses
 		WHERE bic_code = $1`, bic).Scan(&status, &blockedAt, &reason)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrParticipantNotFound
+		}
 		return nil, err
 	}
 	return map[string]interface{}{

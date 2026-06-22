@@ -389,7 +389,7 @@ func (s *Server) handleGetBlock(w http.ResponseWriter, r *http.Request) {
 	}
 	details, err := s.Ledger.GetBlockDetails(r.Context(), bic)
 	if err != nil {
-		if strings.Contains(err.Error(), "no rows") {
+		if errors.Is(err, ledger.ErrParticipantNotFound) {
 			http.Error(w, "Participant not found", http.StatusNotFound)
 			return
 		}
@@ -621,7 +621,7 @@ func (s *Server) processXMLPayment(w http.ResponseWriter, r *http.Request) {
 				"msg_id":           msg.MsgId,
 				"sender":           msg.Sender,
 				"receiver":         msg.DestBIC,
-				"receiver_sort":    msg.DestSortCode,
+				"receiver_sort_code": msg.DestSortCode,
 				"receiver_account": msg.GetCreditorAccount(),
 				"amount":           msg.Amount,
 				"status":           "SETTLED",
@@ -707,7 +707,7 @@ func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 				"msg_id":           req.MsgID,
 				"sender":           senderBic,
 				"receiver":         req.ReceiverBIC,
-				"receiver_sort":    req.ReceiverSortCode,
+				"receiver_sort_code": req.ReceiverSortCode,
 				"receiver_account": req.ReceiverAccount,
 				"amount":           req.Amount,
 				"status":           "SETTLED",
@@ -753,14 +753,9 @@ func (s *Server) processISO8583Payment(w http.ResponseWriter, r *http.Request) {
 	amount := float64(msg.DE4_Amount) / 100.0
 	msgID := fmt.Sprintf("ISO8583-%s-%06d", time.Now().Format("20060102"), msg.DE11_Trace)
 
-	senderSort := ""
-	if len(msg.DE32_Acquirer) >= 6 {
-		senderSort = msg.DE32_Acquirer[0:6] // Fallback mapping if BIC contains sort info
-	}
-	receiverSort := ""
-	if len(msg.DE100_Receiver) >= 6 {
-		receiverSort = msg.DE100_Receiver[0:6]
-	}
+	var senderSort, receiverSort string
+	s.Ledger.Pool.QueryRow(r.Context(), "SELECT sort_code FROM participant_profiles WHERE bic_code=$1", msg.DE32_Acquirer).Scan(&senderSort)
+	s.Ledger.Pool.QueryRow(r.Context(), "SELECT sort_code FROM participant_profiles WHERE bic_code=$1", msg.DE100_Receiver).Scan(&receiverSort)
 
 	res, err := s.Ledger.SettleSIP(r.Context(), msgID, msg.DE32_Acquirer, msg.DE100_Receiver, amount, msgID, senderSort, receiverSort, msg.DE102_SourceAccount, msg.DE103_DestAccount)
 	if err != nil {
@@ -773,23 +768,26 @@ func (s *Server) processISO8583Payment(w http.ResponseWriter, r *http.Request) {
 		s.Events.Publish(msg.DE100_Receiver, events.Event{
 			Type: "payment.received",
 			Data: map[string]interface{}{
-				"msg_id":           msgID,
-				"sender":           msg.DE32_Acquirer,
-				"receiver":         msg.DE100_Receiver,
-				"receiver_sort":    msg.DE102_SourceAccount,
-				"receiver_account": msg.DE103_DestAccount,
-				"amount":           amount,
-				"status":           "SETTLED",
-				"scheme":           "FPS",
+				"msg_id":             msgID,
+				"sender":             msg.DE32_Acquirer,
+				"receiver":           msg.DE100_Receiver,
+				"receiver_sort_code": receiverSort,
+				"receiver_account":   msg.DE103_DestAccount,
+				"amount":             amount,
+				"status":             "SETTLED",
+				"scheme":             "FPS",
 			},
 		})
 	}
 
 	respCode := "00"
+	httpStatus := http.StatusOK
 	if res.Status == "RJCT" {
 		respCode = "57"
+		httpStatus = http.StatusAccepted
 	} else if res.Status == "PDNG" {
 		respCode = "51"
+		httpStatus = http.StatusAccepted
 	}
 
 	resp := &iso8583.Message0210{
@@ -804,7 +802,7 @@ func (s *Server) processISO8583Payment(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("X-Transaction-Status", res.Status)
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(httpStatus)
 	w.Write(resp.Encode())
 
 	log.Printf("ISO8583 trace=%d amount=%.2f %s->%s status=%s code=%s", msg.DE11_Trace, amount, msg.DE32_Acquirer, msg.DE100_Receiver, res.Status, respCode)
@@ -821,18 +819,74 @@ func (s *Server) handleValidatePayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validateBIC(req.SenderBIC) || !validateBIC(req.ReceiverBIC) {
-		badRequest(w, "Invalid BIC format")
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"valid": false, "sender_bic": req.SenderBIC, "receiver_bic": req.ReceiverBIC,
+			"amount": req.Amount, "reason": "Invalid BIC format",
+		})
 		return
 	}
-	valid := req.Amount > 0 && req.Amount <= 1000000.00
-	result := map[string]interface{}{
-		"valid":         valid,
-		"sender_bic":    req.SenderBIC,
-		"receiver_bic":  req.ReceiverBIC,
-		"amount":        req.Amount,
-		"checks_passed": []string{"bic_format", "positive_amount", "limit_check"},
+	if req.Amount <= 0 {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"valid": false, "sender_bic": req.SenderBIC, "receiver_bic": req.ReceiverBIC,
+			"amount": req.Amount, "reason": "Amount must be positive",
+		})
+		return
 	}
-	writeJSON(w, http.StatusOK, result)
+	if req.Amount > 1000000.00 {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"valid": false, "sender_bic": req.SenderBIC, "receiver_bic": req.ReceiverBIC,
+			"amount": req.Amount, "reason": "Amount exceeds single payment limit",
+		})
+		return
+	}
+
+	checks := []string{"bic_format", "positive_amount", "limit_check"}
+	ctx := r.Context()
+
+	var senderExists, receiverExists bool
+	s.Ledger.Pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM participant_profiles WHERE bic_code=$1)", req.SenderBIC).Scan(&senderExists)
+	s.Ledger.Pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM participant_profiles WHERE bic_code=$1)", req.ReceiverBIC).Scan(&receiverExists)
+	if !senderExists || !receiverExists {
+		reason := "Receiver not found"
+		if !senderExists && !receiverExists {
+			reason = "Sender and receiver not found"
+		} else if !senderExists {
+			reason = "Sender not found"
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"valid": false, "sender_bic": req.SenderBIC, "receiver_bic": req.ReceiverBIC,
+			"amount": req.Amount, "reason": reason,
+		})
+		return
+	}
+	checks = append(checks, "participant_exists")
+
+	var senderActive bool
+	s.Ledger.Pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM participant_statuses WHERE bic_code=$1 AND status='ACTIVE' AND is_closed=false)", req.SenderBIC).Scan(&senderActive)
+	if !senderActive {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"valid": false, "sender_bic": req.SenderBIC, "receiver_bic": req.ReceiverBIC,
+			"amount": req.Amount, "reason": "Sender is not active or is closed",
+		})
+		return
+	}
+	checks = append(checks, "sender_active")
+
+	var balance, overdraft float64
+	s.Ledger.Pool.QueryRow(ctx, "SELECT COALESCE(l.balance,0), COALESCE(st.overdraft_limit,0) FROM participant_liquidity l JOIN participant_statuses st ON st.bic_code=l.bic_code WHERE l.bic_code=$1", req.SenderBIC).Scan(&balance, &overdraft)
+	if balance+overdraft < req.Amount {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"valid": false, "sender_bic": req.SenderBIC, "receiver_bic": req.ReceiverBIC,
+			"amount": req.Amount, "reason": "Insufficient liquidity",
+		})
+		return
+	}
+	checks = append(checks, "sufficient_liquidity")
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"valid": true, "sender_bic": req.SenderBIC, "receiver_bic": req.ReceiverBIC,
+		"amount": req.Amount, "checks_passed": checks,
+	})
 }
 
 func (s *Server) handleGetLimits(w http.ResponseWriter, r *http.Request) {
@@ -856,9 +910,7 @@ func (s *Server) handleUpdateLimit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		SinglePaymentLimit    *float64 `json:"single_payment_limit"`
-		DailyParticipantLimit *float64 `json:"daily_participant_limit"`
-		OverdraftLimit        *float64 `json:"overdraft_limit"`
+		OverdraftLimit *float64 `json:"overdraft_limit"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		badRequest(w, "Invalid request body")
@@ -898,10 +950,10 @@ func (s *Server) handleCancelPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !cancelled {
-		http.Error(w, "Payment cannot be recalled unless it is PENDING", http.StatusConflict)
+		http.Error(w, "Payment cannot be cancelled unless it is PENDING or QUEUED", http.StatusConflict)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"msg_id": msgID, "status": "RECALLED"})
+	writeJSON(w, http.StatusOK, map[string]string{"msg_id": msgID, "status": "CANCELLED"})
 }
 
 func (s *Server) handleCreateForwardDated(w http.ResponseWriter, r *http.Request) {
@@ -1267,14 +1319,9 @@ func (s *Server) handleISO8583TCP(conn net.Conn) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	senderSort := ""
-	if len(msg.DE32_Acquirer) >= 6 {
-		senderSort = msg.DE32_Acquirer[0:6]
-	}
-	receiverSort := ""
-	if len(msg.DE100_Receiver) >= 6 {
-		receiverSort = msg.DE100_Receiver[0:6]
-	}
+	var senderSort, receiverSort string
+	s.Ledger.Pool.QueryRow(ctx, "SELECT sort_code FROM participant_profiles WHERE bic_code=$1", msg.DE32_Acquirer).Scan(&senderSort)
+	s.Ledger.Pool.QueryRow(ctx, "SELECT sort_code FROM participant_profiles WHERE bic_code=$1", msg.DE100_Receiver).Scan(&receiverSort)
 
 	res, err := s.Ledger.SettleSIP(ctx, msgID, msg.DE32_Acquirer, msg.DE100_Receiver, amount, msgID, senderSort, receiverSort, msg.DE102_SourceAccount, msg.DE103_DestAccount)
 	if err != nil {
@@ -1286,14 +1333,14 @@ func (s *Server) handleISO8583TCP(conn net.Conn) {
 		s.Events.Publish(msg.DE100_Receiver, events.Event{
 			Type: "payment.received",
 			Data: map[string]interface{}{
-				"msg_id":           msgID,
-				"sender":           msg.DE32_Acquirer,
-				"receiver":         msg.DE100_Receiver,
-				"receiver_sort":    msg.DE102_SourceAccount,
-				"receiver_account": msg.DE103_DestAccount,
-				"amount":           amount,
-				"status":           "SETTLED",
-				"scheme":           "FPS",
+				"msg_id":             msgID,
+				"sender":             msg.DE32_Acquirer,
+				"receiver":           msg.DE100_Receiver,
+				"receiver_sort_code": receiverSort,
+				"receiver_account":   msg.DE103_DestAccount,
+				"amount":             amount,
+				"status":             "SETTLED",
+				"scheme":             "FPS",
 			},
 		})
 	}
