@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>UKPS - dokumentacja API</title>
+  <link rel="stylesheet" href="assets/ukps-pages.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css" />
+  <style>
+    html, body { height: 100%; margin: 0; }
+    .topbar { max-width: 1460px; margin: 0 auto; padding: 0 20px; }
+    #swagger-ui { max-width: 1460px; margin: 0 auto; padding: 0 20px 48px; }
+    .swagger-ui .topbar { display: none; }
+    .swagger-ui .info .title { font-size: 28px; }
+    .swagger-ui .info { margin: 20px 0; }
+    .swagger-ui .scheme-container { border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="topbar">
+      <div>
+        <p class="eyebrow">UK Payment Systems</p>
+        <h1>Dokumentacja API</h1>
+      </div>
+      <div class="status-strip"><span class="dot"></span><strong><a href="index.html" style="color:#e6edf3">← Powrót do widoku projektu</a></strong></div>
+    </section>
+    <div id="swagger-ui"></div>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    SwaggerUIBundle({
+      url: 'openapi.yaml',
+      dom_id: '#swagger-ui',
+      deepLinking: true,
+      presets: [
+        SwaggerUIBundle.presets.apis,
+        SwaggerUIBundle.SwaggerUIStandalonePreset,
+      ],
+    })
+  </script>
+</body>
+</html>

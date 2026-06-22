@@ -1,0 +1,2130 @@
+openapi: "3.0.3"
+info:
+  title: UK Payment Systems API
+  description: |
+    Three independent payment services mimicking the UK interbank network:
+
+    - **CHAPS** (RTGS) — Real-time gross settlement for high-value payments
+    - **FPS** (Faster Payments) — Near-real-time SIP settlement + DNS cycles
+    - **BACS** — Batch settlement with 3-day cycle model + AUDDIS mandates
+
+    All services are standalone Go binaries with their own PostgreSQL database.
+    They share the same API style but run on different ports.
+  version: "1.0.0"
+  contact:
+    name: UKPS Project
+
+servers:
+  - url: http://localhost:8420
+    description: CHAPS service (port 8420 mapped to 8080)
+  - url: http://localhost:8421
+    description: FPS service (port 8421 mapped to 8081)
+  - url: http://localhost:8422
+    description: BACS service (port 8422 mapped to 8082)
+
+paths:
+  # ─────────────────────────────────────────────
+  # SHARED — Health & System
+  # ─────────────────────────────────────────────
+  /v1/healthz:
+    get:
+      operationId: healthCheck
+      summary: Health check
+      description: Returns service health status. Unauthenticated.
+      tags: [Health]
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  service:
+                    type: string
+                    enum: [CHAPS, FPS, BACS]
+                    example: CHAPS
+              example:
+                status: ok
+                service: CHAPS
+
+  /v1/system/schedule:
+    get:
+      operationId: getSystemSchedule
+      summary: System schedule
+      description: Returns operating hours and demo configuration. Unauthenticated.
+      tags: [Health]
+      responses:
+        "200":
+          description: Schedule details
+          content:
+            application/json:
+              schema:
+                type: object
+              example:
+                date: "2026-06-22"
+                opening_time: "07:00"
+                interbank_cutoff: "18:00"
+                timezone: Europe/London
+                demo_session_minutes: "0"
+
+  # ─────────────────────────────────────────────
+  # PARTICIPANTS (shared pattern across all services)
+  # ─────────────────────────────────────────────
+  /v1/participants/register:
+    post:
+      operationId: registerParticipant
+      summary: Register a new participant
+      description: Creates a new bank participant and returns an API key for authentication.
+      tags: [Participants]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: Participant created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegisterResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /v1/participants:
+    get:
+      operationId: listParticipants
+      summary: List all participants
+      description: Returns all registered bank participants with balances and status.
+      tags: [Participants]
+      responses:
+        "200":
+          description: Participant list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ParticipantSummary"
+
+  /v1/participants/{bic}:
+    patch:
+      operationId: updateParticipant
+      summary: Update participant details
+      tags: [Participants]
+      parameters:
+        - $ref: "#/components/parameters/BIC"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateParticipantRequest"
+      responses:
+        "200":
+          description: Participant updated
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteParticipant
+      summary: Delete a participant
+      tags: [Participants]
+      parameters:
+        - $ref: "#/components/parameters/BIC"
+      responses:
+        "200":
+          description: Participant deleted
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /v1/participants/positions:
+    get:
+      operationId: getPosition
+      summary: Get own liquidity position
+      description: Returns balance, earmarked funds, and available liquidity. Authenticated.
+      tags: [Participants]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Position details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Position"
+
+  /v1/participants/{bic}/status:
+    patch:
+      operationId: updateParticipantStatusByBIC
+      summary: Update participant status (by BIC)
+      tags: [Participants]
+      parameters:
+        - $ref: "#/components/parameters/BIC"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StatusUpdateRequest"
+      responses:
+        "200":
+          description: Status updated
+
+  /v1/participants/status:
+    patch:
+      operationId: updateParticipantStatus
+      summary: Update own participant status
+      description: Authenticated variant. BIC derived from API key.
+      tags: [Participants]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StatusUpdateRequest"
+      responses:
+        "200":
+          description: Status updated
+
+  /v1/participants/{bic}/block:
+    post:
+      operationId: blockParticipantByBIC
+      summary: Block a participant (by BIC)
+      tags: [Participants]
+      parameters:
+        - $ref: "#/components/parameters/BIC"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  default: FRAUD_SUSPECTED
+      responses:
+        "200":
+          $ref: "#/components/responses/BlockResponse"
+    get:
+      operationId: getBlockDetailsByBIC
+      summary: Get block details (by BIC)
+      tags: [Participants]
+      parameters:
+        - $ref: "#/components/parameters/BIC"
+      responses:
+        "200":
+          description: Block details
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: unblockParticipantByBIC
+      summary: Unblock a participant (by BIC)
+      tags: [Participants]
+      parameters:
+        - $ref: "#/components/parameters/BIC"
+      responses:
+        "200":
+          description: Participant unblocked
+
+  /v1/participants/block:
+    post:
+      operationId: blockParticipant
+      summary: Block own participant
+      description: Authenticated variant. BIC from API key.
+      tags: [Participants]
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/BlockResponse"
+    get:
+      operationId: getBlockDetails
+      summary: Get own block details
+      tags: [Participants]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Block details
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: unblockParticipant
+      summary: Unblock own participant
+      tags: [Participants]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Participant unblocked
+
+  # ─────────────────────────────────────────────
+  # LIQUIDITY
+  # ─────────────────────────────────────────────
+  /v1/liquidity/top-up:
+    post:
+      operationId: topUpLiquidity
+      summary: Top up liquidity
+      description: Adds funds to the authenticated participant's balance.
+      tags: [Liquidity]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount]
+              properties:
+                amount:
+                  type: number
+                  format: float
+                  example: 5000000.00
+      responses:
+        "200":
+          description: Liquidity updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bic:
+                    type: string
+                  status:
+                    type: string
+                    example: UPDATED
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  # ─────────────────────────────────────────────
+  # CHAPS (tag)
+  # ─────────────────────────────────────────────
+  /v1/payments/chaps:
+    post:
+      operationId: processChapsPayment
+      summary: Submit a CHAPS payment
+      description: |
+        Accepts JSON or XML (ISO 20022 pacs.008) payment instructions.
+        Content-Type header determines the handler:
+        - `application/json` → direct JSON entry
+        - `application/xml` or `text/xml` → ISO 20022 pacs.008 with XSD validation
+
+        Supports `Idempotency-Key` header as an alternative to body `msg_id`.
+      tags: [CHAPS Payments]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChapsPaymentRequest"
+            example:
+              msg_id: "CHAPS-20260622-TXN001"
+              end_to_end_id: "E2E-REF-001"
+              receiver_bic: "MIDLGB22"
+              receiver_sort_code: "40-05-15"
+              receiver_account: "12345678"
+              amount: 1500000.00
+          application/xml:
+            schema:
+              $ref: "#/components/schemas/BusinessMessage"
+            example: |
+              <?xml version="1.0" encoding="UTF-8"?>
+              <BizMsg xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
+                <AppHdr>
+                  <Fr><FIId><FinInstnId><BICFI>BARCGB22</BICFI></FinInstnId></FIId></Fr>
+                  <To><FIId><FinInstnId><BICFI>MIDLGB22</BICFI></FinInstnId></FIId></To>
+                  <BizMsgIdr>CHAPS-20260622-TXN001</BizMsgIdr>
+                  <MsgDefIdr>pacs.008.001.14</MsgDefIdr>
+                  <CreDt>2026-06-22T10:00:00Z</CreDt>
+                </AppHdr>
+                <Document>
+                  <FIToFICstmrCdtTrf>
+                    <GrpHdr>
+                      <MsgId>CHAPS-20260622-TXN001</MsgId>
+                      <CreDtTm>2026-06-22T10:00:00Z</CreDtTm>
+                      <NbOfTxs>1</NbOfTxs>
+                      <TtlIntrBkSttlmAmt Ccy="GBP">1500000.00</TtlIntrBkSttlmAmt>
+                    </GrpHdr>
+                    <CdtTrfTxInf>
+                      <PmtId>
+                        <EndToEndId>E2E-REF-001</EndToEndId>
+                      </PmtId>
+                      <IntrBkSttlmAmt Ccy="GBP">1500000.00</IntrBkSttlmAmt>
+                      <Dbtr><Nm>Sender Bank</Nm></Dbtr>
+                      <DbtrAcct><Id><Othr><Id>SenderAccount</Id></Othr></Id></DbtrAcct>
+                      <DbtrAgt><FinInstnId><BICFI>BARCGB22</BICFI><ClrSysMmbId><MmbId>20-00-00</MmbId></ClrSysMmbId></FinInstnId></DbtrAgt>
+                      <Cdtr><Nm>Receiver Bank</Nm></Cdtr>
+                      <CdtrAcct><Id><Othr><Id>12345678</Id></Othr></Id></CdtrAcct>
+                      <CdtrAgt><FinInstnId><BICFI>MIDLGB22</BICFI><ClrSysMmbId><MmbId>40-05-15</MmbId></ClrSysMmbId></FinInstnId></CdtrAgt>
+                    </CdtTrfTxInf>
+                  </FIToFICstmrCdtTrf>
+                </Document>
+              </BizMsg>
+      responses:
+        "200":
+          description: Payment settled (ACTC)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentResponse"
+            application/xml:
+              schema:
+                $ref: "#/components/schemas/Pacs002"
+        "202":
+          description: Payment queued (PDNG) or rejected (RJCT)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: Idempotency-Key header differs from body msg_id
+        "415":
+          description: Unsupported Media Type
+        "503":
+          description: Service unavailable (operating hours or ledger failure)
+
+  /v1/payments/chaps/validate:
+    post:
+      operationId: validateChapsPayment
+      summary: Validate a CHAPS payment
+      description: Pre-flight validation of a payment without settling.
+      tags: [CHAPS Payments]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sender_bic:
+                  type: string
+                  example: BARCGB22
+                receiver_bic:
+                  type: string
+                  example: MIDLGB22
+                amount:
+                  type: number
+                  format: float
+                  example: 1500000.00
+      responses:
+        "200":
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+                  checks:
+                    type: array
+                    items:
+                      type: string
+                  errors:
+                    type: array
+                    items:
+                      type: string
+                  available:
+                    type: number
+              example:
+                valid: true
+                checks: [bic_format, positive_amount, limit_check, participant_exists, sender_active, sufficient_liquidity]
+                errors: []
+                available: 5000000.00
+
+  /v1/payments/chaps/limits:
+    get:
+      operationId: getChapsLimits
+      summary: Get CHAPS system limits
+      tags: [CHAPS Payments]
+      parameters:
+        - name: bic
+          in: query
+          schema:
+            type: string
+          description: Optional BIC filter
+      responses:
+        "200":
+          description: Limit details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClearingLimits"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateChapsLimit
+      summary: Update own overdraft limit
+      tags: [CHAPS Payments]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                overdraft_limit:
+                  type: number
+                  format: float
+                  example: 1000000.00
+      responses:
+        "200":
+          description: Limit updated
+
+  /v1/payments/chaps/gridlock/resolve:
+    post:
+      operationId: resolveChapsGridlock
+      summary: Resolve payment gridlock
+      description: Attempts to settle queued payments by resolving liquidity deadlocks.
+      tags: [CHAPS Payments]
+      responses:
+        "200":
+          description: Gridlock resolution result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: COMPLETED
+                  settled:
+                    type: integer
+                    example: 3
+    get:
+      operationId: listChapsPayments
+      summary: List CHAPS payments
+      tags: [CHAPS Payments]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+          description: Optional status filter
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+      responses:
+        "200":
+          description: Payment list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PaymentSummary"
+
+  /v1/payments/chaps/incoming:
+    get:
+      operationId: chapsSSEStream
+      summary: SSE stream for incoming CHAPS payments
+      description: Server-Sent Events stream. Fires `payment.received` on each ACTC settlement.
+      tags: [CHAPS Payments]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              example: |-
+                data: {"type":"payment.received","data":{"msg_id":"CHAPS-20260622-TXN001","sender":"BARCGB22","receiver":"MIDLGB22","receiver_sort_code":"40-05-15","receiver_account":"12345678","amount":1500000,"status":"SETTLED","scheme":"CHAPS"}}
+
+  /v1/payments/chaps/{id}:
+    get:
+      operationId: getChapsPayment
+      summary: Get CHAPS payment details
+      tags: [CHAPS Payments]
+      parameters:
+        - $ref: "#/components/parameters/PaymentID"
+      responses:
+        "200":
+          description: Payment details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentDetails"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: cancelChapsPayment
+      summary: Cancel a CHAPS payment
+      description: Cancels a pending or queued payment. Releases earmarked funds.
+      tags: [CHAPS Payments]
+      parameters:
+        - $ref: "#/components/parameters/PaymentID"
+      responses:
+        "200":
+          description: Payment cancelled
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /v1/payments/chaps/{id}/authorize:
+    post:
+      operationId: authorizeChapsPayment
+      summary: Authorize a queued CHAPS payment
+      description: Authorizes a pending or queued payment for settlement.
+      tags: [CHAPS Payments]
+      parameters:
+        - $ref: "#/components/parameters/PaymentID"
+      responses:
+        "200":
+          description: Payment authorized
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /v1/payments/chaps/{id}/amend:
+    post:
+      operationId: amendChapsPayment
+      summary: Amend a pending CHAPS payment
+      tags: [CHAPS Payments]
+      parameters:
+        - $ref: "#/components/parameters/PaymentID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                end_to_end_id:
+                  type: string
+      responses:
+        "200":
+          description: Payment amended
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  # ─────────────────────────────────────────────
+  # KLIK — CHAPS integration
+  # ─────────────────────────────────────────────
+  /v1/klik/chaps/settle:
+    post:
+      operationId: klikSettle
+      summary: KLIK payment settlement
+      description: |
+        Internal endpoint for the KLIK payment system.
+        Resolves bank names to BICs and settles via CHAPS RTGS.
+      tags: [KLIK]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KlikSettleRequest"
+      responses:
+        "200":
+          description: Settlement result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KlikSettleResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "422":
+          description: Unprocessable (non-GBP currency)
+
+  /v1/klik/chaps/healthz:
+    get:
+      operationId: klikHealth
+      summary: KLIK health check
+      tags: [KLIK]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  system:
+                    type: string
+                    example: CHAPS
+
+  # ─────────────────────────────────────────────
+  # FPS Payments (tag)
+  # ─────────────────────────────────────────────
+  /v1/payments/fps:
+    post:
+      operationId: processFpsPayment
+      summary: Submit an FPS payment
+      description: |
+        Accepts JSON, XML (ISO 20022 pacs.008), or binary ISO 8583.
+        Content-Type dispatch:
+        - `application/json` → SIP settlement
+        - `application/xml` → ISO 20022 with XSD validation
+        - `application/octet-stream` → ISO 8583 0200 message (DE4 in pence)
+
+        Supports `Idempotency-Key` header as alternative to body `msg_id`.
+      tags: [FPS Payments]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FpsPaymentRequest"
+            example:
+              msg_id: "FPS-20260622-TXN001"
+              end_to_end_id: "E2E-REF-001"
+              receiver_bic: "MIDLGB22"
+              receiver_sort_code: "40-05-15"
+              receiver_account: "12345678"
+              amount: 250000.00
+          application/xml:
+            schema:
+              $ref: "#/components/schemas/BusinessMessage"
+            example: |
+              <BizMsg xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
+                <AppHdr>...</AppHdr>
+                <Document>
+                  <FIToFICstmrCdtTrf>
+                    <GrpHdr>
+                      <MsgId>FPS-20260622-TXN001</MsgId>
+                      <CreDtTm>2026-06-22T10:00:00Z</CreDtTm>
+                      <NbOfTxs>1</NbOfTxs>
+                      <TtlIntrBkSttlmAmt Ccy="GBP">250000.00</TtlIntrBkSttlmAmt>
+                    </GrpHdr>
+                    <CdtTrfTxInf>
+                      <PmtId><EndToEndId>E2E-REF-001</EndToEndId></PmtId>
+                      <IntrBkSttlmAmt Ccy="GBP">250000.00</IntrBkSttlmAmt>
+                    </CdtTrfTxInf>
+                  </FIToFICstmrCdtTrf>
+                </Document>
+              </BizMsg>
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: Payment settled (ACTC)
+        "202":
+          description: Queued (PDNG) or rejected (RJCT)
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: Idempotency-Key mismatch
+        "415":
+          description: Unsupported Media Type
+        "503":
+          description: Service unavailable (operating hours)
+    get:
+      operationId: listFpsPayments
+      summary: List FPS payments
+      tags: [FPS Payments]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Payment list
+
+  /v1/payments/fps/validate:
+    post:
+      operationId: validateFpsPayment
+      summary: Validate an FPS payment
+      description: Pre-flight validation. Checks BIC format, participants, status, limits, liquidity.
+      tags: [FPS Payments]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sender_bic:
+                  type: string
+                receiver_bic:
+                  type: string
+                amount:
+                  type: number
+      responses:
+        "200":
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+                  reason:
+                    type: string
+
+  /v1/payments/fps/limits:
+    get:
+      operationId: getFpsLimits
+      summary: Get FPS system limits
+      tags: [FPS Payments]
+      parameters:
+        - name: bic
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Limit details
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateFpsLimit
+      summary: Update own FPS overdraft limit
+      tags: [FPS Payments]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                overdraft_limit:
+                  type: number
+      responses:
+        "200":
+          description: Limit updated
+
+  /v1/payments/fps/gridlock/resolve:
+    post:
+      operationId: resolveFpsGridlock
+      summary: Resolve FPS gridlock
+      tags: [FPS Payments]
+      responses:
+        "200":
+          description: Gridlock resolved
+
+  /v1/payments/fps/{id}:
+    get:
+      operationId: getFpsPayment
+      summary: Get FPS payment details
+      tags: [FPS Payments]
+      parameters:
+        - $ref: "#/components/parameters/PaymentID"
+      responses:
+        "200":
+          description: Payment details
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: cancelFpsPayment
+      summary: Cancel an FPS payment
+      tags: [FPS Payments]
+      parameters:
+        - $ref: "#/components/parameters/PaymentID"
+      responses:
+        "200":
+          description: Payment cancelled
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /v1/payments/fps/incoming:
+    get:
+      operationId: fpsSSEStream
+      summary: SSE stream for incoming FPS payments
+      description: Server-Sent Events stream for real-time payment notifications.
+      tags: [FPS Payments]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+  /v1/payments/fps/forward-dated:
+    post:
+      operationId: createForwardDatedPayment
+      summary: Schedule a forward-dated payment
+      tags: [FPS Payments]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                msg_id:
+                  type: string
+                receiver_bic:
+                  type: string
+                amount:
+                  type: number
+                execution_date:
+                  type: string
+                  format: date
+                  example: "2026-06-25"
+      responses:
+        "201":
+          description: Payment scheduled
+    get:
+      operationId: listForwardDatedPayments
+      summary: List forward-dated payments
+      tags: [FPS Payments]
+      responses:
+        "200":
+          description: Forward-dated payment list
+
+  /v1/payments/fps/forward-dated/{id}:
+    delete:
+      operationId: cancelForwardDatedPayment
+      summary: Cancel a forward-dated payment
+      tags: [FPS Payments]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Forward-dated payment cancelled
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/payments/fps/standing-orders:
+    post:
+      operationId: createStandingOrder
+      summary: Create a standing order
+      tags: [FPS Payments]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reference:
+                  type: string
+                receiver_bic:
+                  type: string
+                amount:
+                  type: number
+                frequency:
+                  type: string
+                  example: MONTHLY
+                next_date:
+                  type: string
+                  format: date
+                end_date:
+                  type: string
+                  format: date
+      responses:
+        "201":
+          description: Standing order created
+    get:
+      operationId: listStandingOrders
+      summary: List standing orders
+      tags: [FPS Payments]
+      responses:
+        "200":
+          description: Standing order list
+
+  /v1/payments/fps/standing-orders/{id}:
+    get:
+      operationId: getStandingOrder
+      summary: Get standing order details
+      tags: [FPS Payments]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Standing order details
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateStandingOrder
+      summary: Update a standing order
+      tags: [FPS Payments]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                frequency:
+                  type: string
+                amount:
+                  type: number
+                next_date:
+                  type: string
+                  format: date
+                end_date:
+                  type: string
+                  format: date
+      responses:
+        "200":
+          description: Standing order updated
+    delete:
+      operationId: cancelStandingOrder
+      summary: Cancel a standing order
+      tags: [FPS Payments]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Standing order cancelled
+
+  /v1/payments/fps/bulk:
+    post:
+      operationId: createBulkSubmission
+      summary: Create a bulk submission
+      tags: [FPS Payments]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                filename:
+                  type: string
+                total_items:
+                  type: integer
+                total_value:
+                  type: number
+      responses:
+        "201":
+          description: Bulk submission created
+    get:
+      operationId: listBulkSubmissions
+      summary: List bulk submissions
+      tags: [FPS Payments]
+      responses:
+        "200":
+          description: Bulk submission list
+
+  /v1/payments/fps/bulk/{id}:
+    get:
+      operationId: getBulkSubmission
+      summary: Get bulk submission details
+      tags: [FPS Payments]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Bulk submission details
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/payments/fps/iso8583:
+    post:
+      operationId: processFpsISO8583
+      summary: Submit ISO 8583 payment (HTTP)
+      description: Binary ISO 8583 0200 message over HTTP. Supports `Idempotency-Key` header.
+      tags: [FPS Payments]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: Payment settled (DE39=00)
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "202":
+          description: Rejected (DE39=57) or queued (DE39=51)
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /v1/payments/fps/iso8583/decode:
+    post:
+      operationId: decodeISO8583
+      summary: Decode an ISO 8583 message
+      description: Parses a binary ISO 8583 message and returns the fields as JSON. No settlement.
+      tags: [FPS Payments]
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: Parsed message
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  # ─────────────────────────────────────────────
+  # FPS — DNS Settlement
+  # ─────────────────────────────────────────────
+  /v1/settlement/dns/cycle:
+    get:
+      operationId: getCurrentDNS
+      summary: Get current DNS cycle
+      tags: [FPS Settlement]
+      responses:
+        "200":
+          description: Current DNS cycle
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/settlement/dns/close:
+    post:
+      operationId: closeDNSCycle
+      summary: Close current DNS cycle
+      description: Nets all QUEUED transactions and settles net positions between participants.
+      tags: [FPS Settlement]
+      responses:
+        "200":
+          description: Cycle closed with net positions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  net_positions:
+                    type: array
+                    items:
+                      type: object
+
+  /v1/settlement/dns/history:
+    get:
+      operationId: getDNSHistory
+      summary: Get DNS cycle history
+      tags: [FPS Settlement]
+      responses:
+        "200":
+          description: DNS cycle history
+
+  # ─────────────────────────────────────────────
+  # FPS — Liquidity
+  # ─────────────────────────────────────────────
+  /v1/liquidity/prefunded:
+    get:
+      operationId: getPrefundedBalance
+      summary: Get prefunded balance
+      tags: [Liquidity]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Prefunded balance
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ─────────────────────────────────────────────
+  # BACS Payments (tag)
+  # ─────────────────────────────────────────────
+  /v1/payments/bacs/submit:
+    post:
+      operationId: submitBacsFile
+      summary: Submit a BACS Standard 18 file
+      description: |
+        Accepts Standard 18 format file via multipart upload or raw body.
+        Parses, validates, and stores for the current cycle.
+      tags: [BACS Payments]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Standard 18 text file
+          text/plain:
+            schema:
+              type: string
+            example: |
+              1,20-00-00,40-05-15,,,V,02,200625,100000.00,2,12345678,98765432
+              2,20-00-00,40-05-15,200625,200628,200629,100000.00,2,SU,12345678,,,REF001,,,,,,,
+              3,98765432,SORT01,,50000.00,SMITH,JOHN,,REF001
+              4,12345678,DEST01,,50000.00,JONES,MARY,,REF001
+              5,20-00-00,40-05-15,200625,,2,50000.00,200625,REF001,2
+      responses:
+        "201":
+          description: Submission received
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  filename:
+                    type: string
+                  volume:
+                    type: integer
+                  value:
+                    type: number
+                  status:
+                    type: string
+                  cycle_id:
+                    type: integer
+        "202":
+          description: Partially stored
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          description: Service unavailable (input cutoff or no open cycle)
+    get:
+      operationId: listBacsSubmissions
+      summary: List submissions
+      tags: [BACS Payments]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: su_bic
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Submission list
+
+  /v1/payments/bacs/submit/{id}:
+    get:
+      operationId: getBacsSubmission
+      summary: Get submission details
+      tags: [BACS Payments]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Submission details
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteBacsSubmission
+      summary: Recall a submission
+      tags: [BACS Payments]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Submission recalled
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  # ─────────────────────────────────────────────
+  # BACS — Cycles
+  # ─────────────────────────────────────────────
+  /v1/payments/bacs/cycle/current:
+    get:
+      operationId: getCurrentBacsCycle
+      summary: Get current BACS cycle
+      tags: [BACS Cycles]
+      responses:
+        "200":
+          description: Current cycle
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/payments/bacs/cycle/{cycleDate}:
+    get:
+      operationId: getBacsCycleByDate
+      summary: Get BACS cycle by date
+      tags: [BACS Cycles]
+      parameters:
+        - name: cycleDate
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Cycle details
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/payments/bacs/cycle:
+    get:
+      operationId: listBacsCycles
+      summary: List BACS cycles
+      tags: [BACS Cycles]
+      responses:
+        "200":
+          description: Cycle list
+
+  /v1/payments/bacs/cycle/close:
+    post:
+      operationId: closeBacsInputDay
+      summary: Close the current BACS input day
+      description: Transitions cycle from OPEN to PROCESSING state.
+      tags: [BACS Cycles]
+      responses:
+        "200":
+          description: Cycle processing
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /v1/payments/bacs/cycle/process:
+    post:
+      operationId: processBacsCycle
+      summary: Process BACS cycle
+      description: Transitions cycle from PROCESSING to AWAITING_SETTLEMENT.
+      tags: [BACS Cycles]
+      responses:
+        "200":
+          description: Cycle awaiting settlement
+
+  /v1/payments/bacs/cycle/settle:
+    post:
+      operationId: settleBacsCycle
+      summary: Settle the BACS cycle
+      description: |
+        Settles all transactions in the cycle.
+        Publishes `cycle.settled` SSE events to each participant.
+      tags: [BACS Cycles]
+      responses:
+        "200":
+          description: Cycle settled
+
+  # ─────────────────────────────────────────────
+  # BACS — Mandates
+  # ─────────────────────────────────────────────
+  /v1/payments/bacs/mandates:
+    post:
+      operationId: createMandate
+      summary: Create a BACS Direct Debit mandate (AUDDIS)
+      tags: [BACS Mandates]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reference:
+                  type: string
+                su_bic:
+                  type: string
+                payer_name:
+                  type: string
+                payer_sort_code:
+                  type: string
+                payer_account:
+                  type: string
+                amount:
+                  type: number
+                frequency:
+                  type: string
+                  example: MONTHLY
+      responses:
+        "201":
+          description: Mandate created
+    get:
+      operationId: listMandates
+      summary: List all mandates
+      tags: [BACS Mandates]
+      parameters:
+        - name: su_bic
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Mandate list
+
+  /v1/payments/bacs/mandates/{ref}:
+    get:
+      operationId: getMandate
+      summary: Get mandate details
+      tags: [BACS Mandates]
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Mandate details
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: amendMandate
+      summary: Amend a mandate
+      tags: [BACS Mandates]
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount:
+                  type: number
+                frequency:
+                  type: string
+      responses:
+        "200":
+          description: Mandate amended
+        "409":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      operationId: cancelMandate
+      summary: Cancel a mandate
+      tags: [BACS Mandates]
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Mandate cancelled
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /v1/payments/bacs/mandates/{ref}/claim:
+    post:
+      operationId: claimMandate
+      summary: Claim a mandate
+      description: Links a payer account to an AUDDIS mandate.
+      tags: [BACS Mandates]
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                payer_sort_code:
+                  type: string
+                payer_account:
+                  type: string
+      responses:
+        "200":
+          description: Mandate claimed
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ─────────────────────────────────────────────
+  # BACS — Returns & Rejects
+  # ─────────────────────────────────────────────
+  /v1/payments/bacs/returns:
+    get:
+      operationId: listBacsReturns
+      summary: List BACS returns (ARUCS)
+      tags: [BACS Returns]
+      responses:
+        "200":
+          description: Returns list
+    post:
+      operationId: createBacsReturn
+      summary: Create a BACS return (ARUCS)
+      tags: [BACS Returns]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                original_transaction_id:
+                  type: integer
+                reason_code:
+                  type: string
+                amount:
+                  type: number
+      responses:
+        "201":
+          description: Return created
+
+  /v1/payments/bacs/rejects:
+    get:
+      operationId: listBacsRejects
+      summary: List rejected submissions
+      tags: [BACS Returns]
+      responses:
+        "200":
+          description: Rejects list
+
+  # ─────────────────────────────────────────────
+  # BACS — Reports
+  # ─────────────────────────────────────────────
+  /v1/payments/bacs/reports/{cycleDate}:
+    get:
+      operationId: getCycleReports
+      summary: Get cycle reports
+      tags: [BACS Reports]
+      parameters:
+        - name: cycleDate
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Cycle reports
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/payments/bacs/reports/{cycleDate}/su:
+    get:
+      operationId: getCycleReportsForSU
+      summary: Get service user reports for a cycle
+      tags: [BACS Reports]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: cycleDate
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: SU reports
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/payments/bacs/reports/{cycleDate}/summary:
+    get:
+      operationId: getCycleSummary
+      summary: Get cycle summary
+      tags: [BACS Reports]
+      parameters:
+        - name: cycleDate
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Cycle summary
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/payments/bacs/reports/{cycleDate}/netting:
+    get:
+      operationId: getNettingReport
+      summary: Get netting report
+      tags: [BACS Reports]
+      parameters:
+        - name: cycleDate
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: bic
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Netting report
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/payments/bacs/su/reports:
+    get:
+      operationId: getSUReports
+      summary: Get service user reports
+      tags: [BACS Reports]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: SU reports
+
+  # ─────────────────────────────────────────────
+  # BACS — Limits & Incoming SSE
+  # ─────────────────────────────────────────────
+  /v1/payments/bacs/limits:
+    get:
+      operationId: getBacsLimits
+      summary: Get BACS system limits
+      tags: [BACS Reports]
+      responses:
+        "200":
+          description: BACS limits
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateBacsLimit
+      summary: Update own BACS overdraft limit
+      tags: [BACS Reports]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                overdraft_limit:
+                  type: number
+      responses:
+        "200":
+          description: Limit updated
+
+  /v1/payments/bacs/incoming:
+    get:
+      operationId: bacsSSEStream
+      summary: SSE stream for BACS cycle settlement
+      description: Server-Sent Events stream. Fires `cycle.settled` on each cycle settlement.
+      tags: [BACS Reports]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API Key
+      description: |
+        API key returned from `POST /v1/participants/register`.
+        Sent as `Authorization: Bearer <api_key>`.
+        The BIC is derived from the API key via DB lookup.
+
+  parameters:
+    BIC:
+      name: bic
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[A-Z0-9]{8,11}$"
+      description: Bank Identifier Code (8-11 alphanumeric)
+      example: BARCGB22
+    PaymentID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        maxLength: 35
+      description: Payment message ID (max 35 characters)
+      example: "CHAPS-20260622-TXN001"
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+          example:
+            error: "msg_id, receiver_bic, and positive amount are required"
+    Unauthorized:
+      description: Authentication required or invalid API key
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+          example:
+            error: "invalid API key"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+          example:
+            error: "Payment not found"
+    Conflict:
+      description: Resource conflict
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+          example:
+            error: "This payment cannot be cancelled"
+    ServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+          example:
+            error: "Internal Server Error"
+    BlockResponse:
+      description: Block operation result
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              bic:
+                type: string
+              status:
+                type: string
+                example: SUSPENDED
+              reason:
+                type: string
+
+  schemas:
+    # ── Shared ──
+    RegisterRequest:
+      type: object
+      properties:
+        bic:
+          type: string
+          description: BIC code (8-11 characters)
+          example: BARCGB22
+        name:
+          type: string
+          description: Bank name
+          example: Barclays Bank
+        sort_code:
+          type: string
+          description: UK sort code (XX-XX-XX or XXXXXX format)
+          example: "20-00-00"
+        balance:
+          type: number
+          format: float
+          description: Initial balance
+          example: 50000000.00
+        participant_type:
+          type: string
+          enum: [DIRECT, INDIRECT]
+          description: FPS-specific participant type
+        sponsor_bic:
+          type: string
+          description: FPS sponsor BIC (for INDIRECT participants)
+        su_code:
+          type: string
+          description: BACS service user code
+        is_service_user:
+          type: boolean
+          description: BACS service user flag
+        is_destination_user:
+          type: boolean
+          description: BACS destination user flag
+      required: [bic, name, sort_code]
+
+    RegisterResponse:
+      type: object
+      properties:
+        bic:
+          type: string
+          example: BARCGB22
+        api_key:
+          type: string
+          example: "apk_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"
+        status:
+          type: string
+          example: ACTIVE
+
+    ParticipantSummary:
+      type: object
+      properties:
+        bic:
+          type: string
+        name:
+          type: string
+        sort_code:
+          type: string
+        status:
+          type: string
+        balance:
+          type: number
+        currency:
+          type: string
+        is_closed:
+          type: boolean
+        overdraft_limit:
+          type: number
+        block_reason:
+          type: string
+          nullable: true
+
+    UpdateParticipantRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        sort_code:
+          type: string
+        balance:
+          type: number
+
+    StatusUpdateRequest:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ACTIVE, SUSPENDED, DISABLED]
+          example: SUSPENDED
+        reason:
+          type: string
+          example: FRAUD_SUSPECTED
+
+    Position:
+      type: object
+      properties:
+        bic:
+          type: string
+        balance:
+          type: number
+          description: Current ledger balance
+        earmarked:
+          type: number
+          description: Funds reserved for queued payments (CHAPS only)
+        available:
+          type: number
+          description: balance - earmarked
+
+    # ── Payment schemas ──
+    ChapsPaymentRequest:
+      type: object
+      required: [msg_id, receiver_bic, receiver_sort_code, receiver_account, amount]
+      properties:
+        msg_id:
+          type: string
+          maxLength: 35
+          description: Unique message ID (idempotency key)
+          example: CHAPS-20260622-TXN001
+        end_to_end_id:
+          type: string
+          description: End-to-end reference
+          example: E2E-REF-001
+        receiver_bic:
+          type: string
+          description: Receiver BIC
+          example: MIDLGB22
+        receiver_sort_code:
+          type: string
+          description: Receiver UK sort code
+          example: "40-05-15"
+        receiver_account:
+          type: string
+          description: Receiver account number
+          example: "12345678"
+        amount:
+          type: number
+          format: float
+          description: Amount in GBP
+          example: 1500000.00
+
+    FpsPaymentRequest:
+      type: object
+      required: [msg_id, receiver_bic, receiver_sort_code, receiver_account, amount]
+      properties:
+        msg_id:
+          type: string
+          maxLength: 35
+          example: FPS-20260622-TXN001
+        end_to_end_id:
+          type: string
+        receiver_bic:
+          type: string
+          example: MIDLGB22
+        receiver_sort_code:
+          type: string
+          example: "40-05-15"
+        receiver_account:
+          type: string
+          example: "12345678"
+        amount:
+          type: number
+          format: float
+          example: 250000.00
+
+    PaymentResponse:
+      type: object
+      properties:
+        msg_id:
+          type: string
+        status:
+          type: string
+          enum: [SETTLED, QUEUED, REJECTED]
+        iso_status:
+          type: string
+          enum: [ACTC, PDNG, RJCT]
+        reason_code:
+          type: string
+
+    PaymentSummary:
+      type: object
+      properties:
+        msg_id:
+          type: string
+        sender_bic:
+          type: string
+        receiver_bic:
+          type: string
+        sender_sort_code:
+          type: string
+        receiver_sort_code:
+          type: string
+        amount:
+          type: number
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    PaymentDetails:
+      type: object
+      properties:
+        msg_id:
+          type: string
+        status:
+          type: string
+        amount:
+          type: number
+        sender_bic:
+          type: string
+        receiver_bic:
+          type: string
+        sender_sort_code:
+          type: string
+        receiver_sort_code:
+          type: string
+        end_to_end_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        audit_trail:
+          type: array
+          items:
+            type: object
+            properties:
+              bic:
+                type: string
+              amount:
+                type: number
+
+    ClearingLimits:
+      type: object
+      properties:
+        currency:
+          type: string
+          example: GBP
+        single_payment_limit:
+          type: number
+          example: 20000000.00
+        daily_participant_limit:
+          type: number
+          example: 10000000.00
+        total_available_liquidity:
+          type: number
+          example: 500000000.00
+        remaining_intraday_liquidity:
+          type: number
+          example: 150000000.00
+
+    # ── KLIK ──
+    KlikSettleRequest:
+      type: object
+      required: [transfer_id, from, to, amount]
+      properties:
+        session_id:
+          type: string
+          description: KLIK session UUID
+          example: 550e8400-e29b-41d4-a716-446655440000
+        transfer_id:
+          type: string
+          description: Unique transfer identifier
+          example: txn-001
+        system:
+          type: string
+          default: CHAPS
+        from:
+          type: string
+          description: Sender bank name (resolved to BIC)
+          example: Barclays Bank
+        to:
+          type: string
+          description: Receiver bank name (resolved to BIC)
+          example: HSBC
+        amount:
+          type: string
+          description: Amount as string (parsed to float)
+          example: "250.00"
+        currency:
+          type: string
+          default: GBP
+          example: GBP
+
+    KlikSettleResponse:
+      type: object
+      properties:
+        transfer_id:
+          type: string
+        status:
+          type: string
+          enum: [SUCCESS, FAILED]
+        rtgs_reference:
+          type: string
+          description: CHAPS reference (on success only)
+          example: CHAPS-TXN-001
+        failure_reason:
+          type: string
+          description: Failure reason (on failure only)
+
+    # ── ISO 20022 ──
+    BusinessMessage:
+      type: object
+      description: ISO 20022 Business Message envelope (BizMsg)
+      properties:
+        AppHdr:
+          type: object
+          description: Business Application Header
+        Document:
+          type: object
+          description: Message document (pacs.008 or pacs.002)
+
+    Pacs002:
+      type: object
+      description: |
+        ISO 20022 Payment Status Report (pacs.002.001.16).
+        Returned for XML payment submissions.
+      properties:
+        status:
+          type: string
+          enum: [ACTC, RJCT, PDNG]
+
+    # ── SSE ──
+    SSEEvent:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [payment.received, cycle.settled]
+        data:
+          type: object
