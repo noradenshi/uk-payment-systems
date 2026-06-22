@@ -98,6 +98,12 @@ func writeJSON(w http.ResponseWriter, status int, payload interface{}) {
 	}
 }
 
+func jsonError(w http.ResponseWriter, msg string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
 func badRequest(w http.ResponseWriter, message string) {
 	writeJSON(w, http.StatusBadRequest, map[string]string{"error": message})
 }
@@ -192,7 +198,7 @@ func checkInputCutoff(cfg map[string]interface{}, now time.Time) error {
 func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	cfg := loadGlobalSchedule("bacs")
 	if err := checkInputCutoff(cfg, time.Now()); err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		jsonError(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 
@@ -249,7 +255,7 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	cycle, err := s.Ledger.GetCurrentCycle(r.Context())
 	if err != nil {
 		log.Printf("Failed to get current cycle: %v", err)
-		http.Error(w, "No open cycle available", http.StatusServiceUnavailable)
+		jsonError(w, "No open cycle available", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -278,7 +284,7 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	subID, err := s.Ledger.CreateSubmission(r.Context(), filename, suBic, totalVolume, totalValue, cycleID)
 	if err != nil {
 		log.Printf("Failed to create submission: %v", err)
-		http.Error(w, "Failed to create submission", http.StatusInternalServerError)
+		jsonError(w, "Failed to create submission", http.StatusInternalServerError)
 		return
 	}
 
@@ -337,7 +343,7 @@ func (s *Server) handleGetSubmission(w http.ResponseWriter, r *http.Request) {
 	sub, err := s.Ledger.GetSubmission(r.Context(), id)
 	if err != nil {
 		log.Printf("GetSubmission error: %v", err)
-		http.Error(w, "Submission not found", http.StatusNotFound)
+		jsonError(w, "Submission not found", http.StatusNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, sub)
@@ -349,7 +355,7 @@ func (s *Server) handleListSubmissions(w http.ResponseWriter, r *http.Request) {
 	submissions, err := s.Ledger.ListSubmissions(r.Context(), statusFilter, suBic)
 	if err != nil {
 		log.Printf("Failed to list submissions: %v", err)
-		http.Error(w, "Failed to list submissions", http.StatusInternalServerError)
+		jsonError(w, "Failed to list submissions", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, submissions)
@@ -363,7 +369,7 @@ func (s *Server) handleDeleteSubmission(w http.ResponseWriter, r *http.Request) 
 	}
 	if err := s.Ledger.RecallSubmission(r.Context(), id); err != nil {
 		log.Printf("RecallSubmission error: %v", err)
-		http.Error(w, err.Error(), http.StatusConflict)
+		jsonError(w, err.Error(), http.StatusConflict)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"id": id, "status": "RECALLED"})
@@ -375,7 +381,7 @@ func (s *Server) handleGetCurrentCycle(w http.ResponseWriter, r *http.Request) {
 	cycle, err := s.Ledger.GetCurrentCycle(r.Context())
 	if err != nil {
 		log.Printf("GetCurrentCycle error: %v", err)
-		http.Error(w, "No open cycle found", http.StatusNotFound)
+		jsonError(w, "No open cycle found", http.StatusNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, cycle)
@@ -390,7 +396,7 @@ func (s *Server) handleGetCycleByDate(w http.ResponseWriter, r *http.Request) {
 	reports, err := s.Ledger.GetCycleReports(r.Context(), cycleDate, "")
 	if err != nil {
 		log.Printf("GetCycleReports error: %v", err)
-		http.Error(w, "Cycle not found", http.StatusNotFound)
+		jsonError(w, "Cycle not found", http.StatusNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, reports)
@@ -400,7 +406,7 @@ func (s *Server) handleListCycles(w http.ResponseWriter, r *http.Request) {
 	cycles, err := s.Ledger.ListCycles(r.Context())
 	if err != nil {
 		log.Printf("Failed to list cycles: %v", err)
-		http.Error(w, "Failed to list cycles", http.StatusInternalServerError)
+		jsonError(w, "Failed to list cycles", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, cycles)
@@ -412,7 +418,7 @@ func (s *Server) handleCloseInputDay(w http.ResponseWriter, r *http.Request) {
 	settlementMin := getDuration(cfg, "settlement_duration_minutes", 1440)
 	if err := s.Ledger.CloseInputDay(r.Context(), processingMin, settlementMin); err != nil {
 		log.Printf("CloseInputDay error: %v", err)
-		http.Error(w, "Failed to close input day", http.StatusInternalServerError)
+		jsonError(w, "Failed to close input day", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "PROCESSING"})
@@ -421,7 +427,7 @@ func (s *Server) handleCloseInputDay(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleProcessCycle(w http.ResponseWriter, r *http.Request) {
 	if err := s.Ledger.ProcessCycle(r.Context()); err != nil {
 		log.Printf("ProcessCycle error: %v", err)
-		http.Error(w, "Failed to process cycle", http.StatusInternalServerError)
+		jsonError(w, "Failed to process cycle", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "AWAITING_SETTLEMENT"})
@@ -431,7 +437,7 @@ func (s *Server) handleSettleCycle(w http.ResponseWriter, r *http.Request) {
 	affectedBICs, err := s.Ledger.SettleCycle(r.Context())
 	if err != nil {
 		log.Printf("SettleCycle error: %v", err)
-		http.Error(w, "Failed to settle cycle", http.StatusInternalServerError)
+		jsonError(w, "Failed to settle cycle", http.StatusInternalServerError)
 		return
 	}
 	for _, bic := range affectedBICs {
@@ -455,7 +461,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		jsonError(w, "streaming not supported", http.StatusInternalServerError)
 		return
 	}
 
@@ -487,7 +493,7 @@ func (s *Server) handleListParticipants(w http.ResponseWriter, r *http.Request) 
 	participants, err := s.Ledger.ListParticipants(r.Context())
 	if err != nil {
 		log.Printf("Failed to list participants: %v", err)
-		http.Error(w, "Failed to list participants", http.StatusInternalServerError)
+		jsonError(w, "Failed to list participants", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, participants)
@@ -526,7 +532,7 @@ func (s *Server) handleRegisterParticipant(w http.ResponseWriter, r *http.Reques
 	apiKey, err := s.Ledger.RegisterParticipant(r.Context(), req.BIC, req.Name, req.Balance, req.SortCode, req.SUCode, req.IsServiceUser, req.IsDestUser)
 	if err != nil {
 		log.Printf("Failed to register participant %s: %v", req.BIC, err)
-		http.Error(w, "Failed to register participant", http.StatusInternalServerError)
+		jsonError(w, "Failed to register participant", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
@@ -573,7 +579,7 @@ func (s *Server) handleUpdateParticipant(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		log.Printf("Failed to update participant %s: %v", bic, err)
-		http.Error(w, "Failed to update participant", http.StatusInternalServerError)
+		jsonError(w, "Failed to update participant", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"bic": bic, "status": "updated"})
@@ -595,7 +601,7 @@ func (s *Server) handleDeleteParticipant(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		log.Printf("Failed to delete participant %s: %v", bic, err)
-		http.Error(w, "Failed to delete participant", http.StatusInternalServerError)
+		jsonError(w, "Failed to delete participant", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"bic": bic, "status": "deleted"})
@@ -610,7 +616,7 @@ func (s *Server) handleGetPosition(w http.ResponseWriter, r *http.Request) {
 	pos, err := s.Ledger.GetPosition(r.Context(), bic)
 	if err != nil {
 		log.Printf("Error fetching position for %s: %v", bic, err)
-		http.Error(w, "Participant not found", http.StatusNotFound)
+		jsonError(w, "Participant not found", http.StatusNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, pos)
@@ -637,7 +643,7 @@ func (s *Server) handleUpdateParticipantStatus(w http.ResponseWriter, r *http.Re
 	}
 	if err := s.Ledger.UpdateParticipantStatus(r.Context(), bic, req.Status, req.Reason); err != nil {
 		log.Printf("Failed to update participant %s: %v", bic, err)
-		http.Error(w, "Failed to update participant", http.StatusInternalServerError)
+		jsonError(w, "Failed to update participant", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"bic": bic, "status": req.Status})
@@ -661,7 +667,7 @@ func (s *Server) handleBlockParticipant(w http.ResponseWriter, r *http.Request) 
 	}
 	if err := s.Ledger.BlockParticipant(r.Context(), bic, reason); err != nil {
 		log.Printf("Failed to block %s: %v", bic, err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		jsonError(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"bic": bic, "status": "SUSPENDED", "reason": reason})
@@ -676,11 +682,11 @@ func (s *Server) handleGetBlockDetails(w http.ResponseWriter, r *http.Request) {
 	details, err := s.Ledger.GetBlockDetails(r.Context(), bic)
 	if err != nil {
 		if errors.Is(err, ledger.ErrParticipantNotFound) {
-			http.Error(w, "Participant not found", http.StatusNotFound)
+			jsonError(w, "Participant not found", http.StatusNotFound)
 			return
 		}
 		log.Printf("Block details error for %s: %v", bic, err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		jsonError(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, details)
@@ -694,7 +700,7 @@ func (s *Server) handleUnblockParticipant(w http.ResponseWriter, r *http.Request
 	}
 	if err := s.Ledger.UnblockParticipant(r.Context(), bic); err != nil {
 		log.Printf("Failed to unblock %s: %v", bic, err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		jsonError(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"bic": bic, "status": "ACTIVE"})
@@ -715,7 +721,7 @@ func (s *Server) handleTopUp(w http.ResponseWriter, r *http.Request) {
 	bic := auth.BICFromContext(r.Context())
 	if err := s.Ledger.TopUpLiquidity(r.Context(), bic, req.Amount); err != nil {
 		log.Printf("Liquidity top-up failed for %s: %v", bic, err)
-		http.Error(w, "Failed to update liquidity", http.StatusInternalServerError)
+		jsonError(w, "Failed to update liquidity", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"bic": bic, "status": "UPDATED"})
@@ -744,7 +750,7 @@ func (s *Server) handleCreateMandate(w http.ResponseWriter, r *http.Request) {
 	id, err := s.Ledger.CreateMandate(r.Context(), req.Reference, req.SUBic, req.PayerName, req.SortCode, req.Account, req.Amount, req.Frequency)
 	if err != nil {
 		log.Printf("Failed to create mandate: %v", err)
-		http.Error(w, "Failed to create mandate", http.StatusInternalServerError)
+		jsonError(w, "Failed to create mandate", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
@@ -762,7 +768,7 @@ func (s *Server) handleGetMandate(w http.ResponseWriter, r *http.Request) {
 	}
 	mandate, err := s.Ledger.GetMandate(r.Context(), ref)
 	if err != nil {
-		http.Error(w, "Mandate not found", http.StatusNotFound)
+		jsonError(w, "Mandate not found", http.StatusNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, mandate)
@@ -773,7 +779,7 @@ func (s *Server) handleListMandates(w http.ResponseWriter, r *http.Request) {
 	mandates, err := s.Ledger.ListMandates(r.Context(), suBic)
 	if err != nil {
 		log.Printf("Failed to list mandates: %v", err)
-		http.Error(w, "Failed to list mandates", http.StatusInternalServerError)
+		jsonError(w, "Failed to list mandates", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, mandates)
@@ -795,7 +801,7 @@ func (s *Server) handleAmendMandate(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.Ledger.AmendMandate(r.Context(), ref, req.Amount, req.Frequency); err != nil {
 		log.Printf("Failed to amend mandate: %v", err)
-		http.Error(w, err.Error(), http.StatusConflict)
+		jsonError(w, err.Error(), http.StatusConflict)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"reference": ref, "status": "AMENDED"})
@@ -809,7 +815,7 @@ func (s *Server) handleCancelMandate(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.Ledger.CancelMandate(r.Context(), ref); err != nil {
 		log.Printf("Failed to cancel mandate: %v", err)
-		http.Error(w, err.Error(), http.StatusConflict)
+		jsonError(w, err.Error(), http.StatusConflict)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"reference": ref, "status": "CANCELLED"})
@@ -831,7 +837,7 @@ func (s *Server) handleClaimMandate(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.Ledger.ClaimMandate(r.Context(), ref, req.SortCode, req.Account); err != nil {
 		log.Printf("Failed to claim mandate: %v", err)
-		http.Error(w, err.Error(), http.StatusNotFound)
+		jsonError(w, err.Error(), http.StatusNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"reference": ref, "status": "CLAIMED"})
@@ -843,7 +849,7 @@ func (s *Server) handleListReturns(w http.ResponseWriter, r *http.Request) {
 	returns, err := s.Ledger.ListReturns(r.Context())
 	if err != nil {
 		log.Printf("Failed to list returns: %v", err)
-		http.Error(w, "Failed to list returns", http.StatusInternalServerError)
+		jsonError(w, "Failed to list returns", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, returns)
@@ -866,7 +872,7 @@ func (s *Server) handleCreateReturn(w http.ResponseWriter, r *http.Request) {
 	id, err := s.Ledger.CreateReturn(r.Context(), req.OriginalTransactionID, req.ReasonCode, req.Amount)
 	if err != nil {
 		log.Printf("Failed to create return: %v", err)
-		http.Error(w, "Failed to create return", http.StatusInternalServerError)
+		jsonError(w, "Failed to create return", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
@@ -879,7 +885,7 @@ func (s *Server) handleListRejects(w http.ResponseWriter, r *http.Request) {
 	submissions, err := s.Ledger.ListSubmissions(r.Context(), "REJECTED", "")
 	if err != nil {
 		log.Printf("Failed to list rejects: %v", err)
-		http.Error(w, "Failed to list rejects", http.StatusInternalServerError)
+		jsonError(w, "Failed to list rejects", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, submissions)
@@ -896,7 +902,7 @@ func (s *Server) handleCycleReports(w http.ResponseWriter, r *http.Request) {
 	reports, err := s.Ledger.GetCycleReports(r.Context(), cycleDate, "")
 	if err != nil {
 		log.Printf("GetCycleReports error: %v", err)
-		http.Error(w, "Cycle reports not found", http.StatusNotFound)
+		jsonError(w, "Cycle reports not found", http.StatusNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, reports)
@@ -912,7 +918,7 @@ func (s *Server) handleCycleReportsForSU(w http.ResponseWriter, r *http.Request)
 	reports, err := s.Ledger.GetCycleReports(r.Context(), cycleDate, bic)
 	if err != nil {
 		log.Printf("GetCycleReports error: %v", err)
-		http.Error(w, "Reports not found", http.StatusNotFound)
+		jsonError(w, "Reports not found", http.StatusNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, reports)
@@ -927,7 +933,7 @@ func (s *Server) handleCycleSummary(w http.ResponseWriter, r *http.Request) {
 	summary, err := s.Ledger.GetCycleSummary(r.Context(), cycleDate)
 	if err != nil {
 		log.Printf("GetCycleSummary error: %v", err)
-		http.Error(w, "Summary not found", http.StatusNotFound)
+		jsonError(w, "Summary not found", http.StatusNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, summary)
@@ -943,7 +949,7 @@ func (s *Server) handleNettingReport(w http.ResponseWriter, r *http.Request) {
 	report, err := s.Ledger.GetNettingReport(r.Context(), cycleDate, bicFilter)
 	if err != nil {
 		log.Printf("GetNettingReport error: %v", err)
-		http.Error(w, "Netting report not found", http.StatusNotFound)
+		jsonError(w, "Netting report not found", http.StatusNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, report)
@@ -958,7 +964,7 @@ func (s *Server) handleSUReports(w http.ResponseWriter, r *http.Request) {
 	submissions, err := s.Ledger.ListSubmissions(r.Context(), "", bic)
 	if err != nil {
 		log.Printf("Failed to list SU reports: %v", err)
-		http.Error(w, "Failed to get reports", http.StatusInternalServerError)
+		jsonError(w, "Failed to get reports", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, submissions)
@@ -969,7 +975,7 @@ func (s *Server) handleSUReports(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetLimits(w http.ResponseWriter, r *http.Request) {
 	limits, err := s.Ledger.GetBACSLimits(r.Context())
 	if err != nil {
-		http.Error(w, "Limits unavailable", http.StatusNotFound)
+		jsonError(w, "Limits unavailable", http.StatusNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, limits)
@@ -994,7 +1000,7 @@ func (s *Server) handlePatchLimits(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.Ledger.UpdateOverdraftLimit(r.Context(), bic, *req.OverdraftLimit); err != nil {
 		log.Printf("Failed to update overdraft limit for %s: %v", bic, err)
-		http.Error(w, "Failed to update limit", http.StatusInternalServerError)
+		jsonError(w, "Failed to update limit", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"bic": bic, "status": "LIMITS_UPDATED", "overdraft_limit": *req.OverdraftLimit})
@@ -1006,7 +1012,7 @@ func (s *Server) handleSystemSchedule(w http.ResponseWriter, r *http.Request) {
 	schedule, err := s.Ledger.GetSchedule(r.Context())
 	if err != nil {
 		log.Printf("GetSchedule error: %v", err)
-		http.Error(w, "Schedule unavailable", http.StatusInternalServerError)
+		jsonError(w, "Schedule unavailable", http.StatusInternalServerError)
 		return
 	}
 	cfg := loadGlobalSchedule("bacs")

@@ -98,6 +98,12 @@ func writeJSON(w http.ResponseWriter, status int, payload interface{}) {
 	}
 }
 
+func jsonError(w http.ResponseWriter, msg string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
 func badRequest(w http.ResponseWriter, message string) {
 	writeJSON(w, http.StatusBadRequest, map[string]string{"error": message})
 }
@@ -158,7 +164,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		jsonError(w, "streaming not supported", http.StatusInternalServerError)
 		return
 	}
 
@@ -248,7 +254,7 @@ func (s *Server) GetPayment(w http.ResponseWriter, r *http.Request) {
 	details, err := s.Ledger.GetPaymentDetails(r.Context(), msgID)
 	if err != nil {
 		log.Printf("Query error for %s: %v", msgID, err)
-		http.Error(w, "Payment not found", http.StatusNotFound)
+		jsonError(w, "Payment not found", http.StatusNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, details)
@@ -268,7 +274,7 @@ func (s *Server) handleListPayments(w http.ResponseWriter, r *http.Request) {
 	payments, err := s.Ledger.ListPayments(r.Context(), strings.ToUpper(r.URL.Query().Get("status")), limit)
 	if err != nil {
 		log.Printf("Failed to list payments: %v", err)
-		http.Error(w, "Failed to list payments", http.StatusInternalServerError)
+		jsonError(w, "Failed to list payments", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, payments)
@@ -278,7 +284,7 @@ func (s *Server) handleListParticipants(w http.ResponseWriter, r *http.Request) 
 	participants, err := s.Ledger.ListParticipants(r.Context())
 	if err != nil {
 		log.Printf("Failed to list participants: %v", err)
-		http.Error(w, "Failed to list participants", http.StatusInternalServerError)
+		jsonError(w, "Failed to list participants", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, participants)
@@ -305,7 +311,7 @@ func (s *Server) handleUpdateParticipantStatus(w http.ResponseWriter, r *http.Re
 	}
 	if err := s.Ledger.UpdateParticipantStatus(r.Context(), bic, req.Status, req.Reason); err != nil {
 		log.Printf("Failed to update participant %s: %v", bic, err)
-		http.Error(w, "Failed to update participant", http.StatusInternalServerError)
+		jsonError(w, "Failed to update participant", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"bic": bic, "status": req.Status})
@@ -347,13 +353,13 @@ func (s *Server) handleUpdateParticipant(w http.ResponseWriter, r *http.Request)
 		badRequest(w, "participant_type must be DIRECT or INDIRECT")
 		return
 	}
-	if err := s.Ledger.UpdateParticipant(r.Context(), bic, req.Name, req.SortCode, req.Balance, req.ParticipantType, req.SponsorBic); err != nil {
+	if err := 	s.Ledger.UpdateParticipant(r.Context(), bic, req.Name, req.SortCode, req.Balance, req.ParticipantType, req.SponsorBic); err != nil {
 		if errors.Is(err, ledger.ErrAccountNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "participant not found"})
 			return
 		}
 		log.Printf("Failed to update participant %s: %v", bic, err)
-		http.Error(w, "Failed to update participant", http.StatusInternalServerError)
+		jsonError(w, "Failed to update participant", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"bic": bic, "status": "updated"})
@@ -375,7 +381,7 @@ func (s *Server) handleDeleteParticipant(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		log.Printf("Failed to delete participant %s: %v", bic, err)
-		http.Error(w, "Failed to delete participant", http.StatusInternalServerError)
+		jsonError(w, "Failed to delete participant", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"bic": bic, "status": "deleted"})
@@ -390,11 +396,11 @@ func (s *Server) handleGetBlock(w http.ResponseWriter, r *http.Request) {
 	details, err := s.Ledger.GetBlockDetails(r.Context(), bic)
 	if err != nil {
 		if errors.Is(err, ledger.ErrParticipantNotFound) {
-			http.Error(w, "Participant not found", http.StatusNotFound)
+			jsonError(w, "Participant not found", http.StatusNotFound)
 			return
 		}
 		log.Printf("Block details error for %s: %v", bic, err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		jsonError(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, details)
@@ -439,7 +445,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	apiKey, err := s.Ledger.RegisterParticipant(r.Context(), req.BIC, req.Name, req.SortCode, req.Balance, req.ParticipantType, req.SponsorBic)
 	if err != nil {
 		log.Printf("Failed to register participant %s: %v", req.BIC, err)
-		http.Error(w, "Failed to create participant", http.StatusInternalServerError)
+		jsonError(w, "Failed to create participant", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{
@@ -458,7 +464,7 @@ func (s *Server) handleGetPosition(w http.ResponseWriter, r *http.Request) {
 	pos, err := s.Ledger.GetPosition(r.Context(), bic)
 	if err != nil {
 		log.Printf("Error fetching position for %s: %v", bic, err)
-		http.Error(w, "Participant not found", http.StatusNotFound)
+		jsonError(w, "Participant not found", http.StatusNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, pos)
@@ -480,7 +486,7 @@ func (s *Server) handleTopUp(w http.ResponseWriter, r *http.Request) {
 	err := s.Ledger.TopUpLiquidity(r.Context(), bic, req.Amount)
 	if err != nil {
 		log.Printf("Liquidity top-up failed for %s: %v", bic, err)
-		http.Error(w, "Failed to update liquidity", http.StatusInternalServerError)
+		jsonError(w, "Failed to update liquidity", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"bic": bic, "status": "UPDATED"})
@@ -505,7 +511,7 @@ func (s *Server) handleBlockParticipant(w http.ResponseWriter, r *http.Request) 
 	err := s.Ledger.BlockParticipant(r.Context(), bic, reason)
 	if err != nil {
 		log.Printf("Failed to block %s: %v", bic, err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		jsonError(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"bic": bic, "status": "SUSPENDED", "reason": reason})
@@ -519,7 +525,7 @@ func (s *Server) handleUnblockParticipant(w http.ResponseWriter, r *http.Request
 	}
 	err := s.Ledger.UnblockParticipant(r.Context(), bic)
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		jsonError(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"bic": bic, "status": "ACTIVE"})
@@ -549,14 +555,14 @@ func (s *Server) ProcessPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Error(w, "Unsupported Media Type: use application/json, application/xml, or application/octet-stream", http.StatusUnsupportedMediaType)
+		jsonError(w, "Unsupported Media Type: use application/json, application/xml, or application/octet-stream", http.StatusUnsupportedMediaType)
 }
 
 func (s *Server) processXMLPayment(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		log.Printf("IO Error reading request body: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		jsonError(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 	defer r.Body.Close()
@@ -599,7 +605,7 @@ func (s *Server) processXMLPayment(w http.ResponseWriter, r *http.Request) {
 	res, err := s.Ledger.SettleSIP(r.Context(), msg.MsgId, msg.Sender, msg.DestBIC, msg.Amount, msg.EndToEndId, msg.SenderSortCode, msg.DestSortCode, msg.GetDebtorAccount(), msg.GetCreditorAccount())
 	if err != nil {
 		log.Printf("[CRITICAL] Ledger system failure for MsgId %s: %v", msg.MsgId, err)
-		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+		jsonError(w, "Service Unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -652,8 +658,17 @@ func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "Invalid request body")
 		return
 	}
-	if req.MsgID == "" || req.ReceiverBIC == "" || req.Amount <= 0 {
-		badRequest(w, "msg_id, receiver_bic, and positive amount are required")
+
+	msgID := req.MsgID
+	if idKey := r.Header.Get("Idempotency-Key"); idKey != "" {
+		if msgID != "" && msgID != idKey {
+			jsonError(w, "msg_id in body differs from Idempotency-Key header", http.StatusConflict)
+			return
+		}
+		msgID = idKey
+	}
+	if msgID == "" || req.ReceiverBIC == "" || req.Amount <= 0 {
+		badRequest(w, "msg_id (or Idempotency-Key), receiver_bic, and positive amount are required")
 		return
 	}
 	if !validateBIC(req.ReceiverBIC) {
@@ -664,7 +679,7 @@ func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "receiver_sort_code is required")
 		return
 	}
-	if len(req.MsgID) > 35 {
+	if len(msgID) > 35 {
 		badRequest(w, "msg_id exceeds 35 character limit")
 		return
 	}
@@ -678,14 +693,14 @@ func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 	senderSortCode, err := s.Ledger.GetSortCode(r.Context(), senderBic)
 	if err != nil {
 		log.Printf("Failed to lookup sender sort code for %s: %v", senderBic, err)
-		http.Error(w, "Sender not found", http.StatusInternalServerError)
+		jsonError(w, "Sender not found", http.StatusInternalServerError)
 		return
 	}
 
-	res, err := s.Ledger.SettleSIP(r.Context(), req.MsgID, senderBic, req.ReceiverBIC, req.Amount, req.EndToEndID, senderSortCode, req.ReceiverSortCode, "", req.ReceiverAccount)
+	res, err := s.Ledger.SettleSIP(r.Context(), msgID, senderBic, req.ReceiverBIC, req.Amount, req.EndToEndID, senderSortCode, req.ReceiverSortCode, "", req.ReceiverAccount)
 	if err != nil {
-		log.Printf("[CRITICAL] Ledger system failure for MsgId %s: %v", req.MsgID, err)
-		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+		log.Printf("[CRITICAL] Ledger system failure for MsgId %s: %v", msgID, err)
+		jsonError(w, "Service Unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -704,7 +719,7 @@ func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 		s.Events.Publish(req.ReceiverBIC, events.Event{
 			Type: "payment.received",
 			Data: map[string]interface{}{
-				"msg_id":           req.MsgID,
+				"msg_id":           msgID,
 				"sender":           senderBic,
 				"receiver":         req.ReceiverBIC,
 				"receiver_sort_code": req.ReceiverSortCode,
@@ -718,7 +733,7 @@ func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("X-Transaction-Status", res.Status)
 	writeJSON(w, httpStatus, map[string]string{
-		"msg_id":      req.MsgID,
+		"msg_id":      msgID,
 		"status":      status,
 		"iso_status":  res.Status,
 		"reason_code": res.ReasonCode,
@@ -751,7 +766,10 @@ func (s *Server) processISO8583Payment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	amount := float64(msg.DE4_Amount) / 100.0
-	msgID := fmt.Sprintf("ISO8583-%s-%06d", time.Now().Format("20060102"), msg.DE11_Trace)
+	msgID := r.Header.Get("Idempotency-Key")
+	if msgID == "" {
+		msgID = fmt.Sprintf("ISO8583-%s-%06d", time.Now().Format("20060102"), msg.DE11_Trace)
+	}
 
 	var senderSort, receiverSort string
 	s.Ledger.Pool.QueryRow(r.Context(), "SELECT sort_code FROM participant_profiles WHERE bic_code=$1", msg.DE32_Acquirer).Scan(&senderSort)
@@ -760,7 +778,7 @@ func (s *Server) processISO8583Payment(w http.ResponseWriter, r *http.Request) {
 	res, err := s.Ledger.SettleSIP(r.Context(), msgID, msg.DE32_Acquirer, msg.DE100_Receiver, amount, msgID, senderSort, receiverSort, msg.DE102_SourceAccount, msg.DE103_DestAccount)
 	if err != nil {
 		log.Printf("[CRITICAL] ISO8583 ledger failure for trace %d: %v", msg.DE11_Trace, err)
-		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+		jsonError(w, "Service Unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -897,7 +915,7 @@ func (s *Server) handleGetLimits(w http.ResponseWriter, r *http.Request) {
 	}
 	limits, err := s.Ledger.GetFPSLimits(r.Context(), strings.ToUpper(bic))
 	if err != nil {
-		http.Error(w, "Limits unavailable", http.StatusNotFound)
+		jsonError(w, "Limits unavailable", http.StatusNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, limits)
@@ -922,7 +940,7 @@ func (s *Server) handleUpdateLimit(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.Ledger.UpdateOverdraftLimit(r.Context(), bic, *req.OverdraftLimit); err != nil {
 		log.Printf("Failed to update overdraft limit for %s: %v", bic, err)
-		http.Error(w, "Failed to update limit", http.StatusInternalServerError)
+		jsonError(w, "Failed to update limit", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"bic": bic, "status": "LIMITS_UPDATED", "overdraft_limit": *req.OverdraftLimit})
@@ -932,7 +950,7 @@ func (s *Server) handleResolveGridlock(w http.ResponseWriter, r *http.Request) {
 	settled, err := s.Ledger.ResolveGridlock(r.Context())
 	if err != nil {
 		log.Printf("Gridlock resolution failed: %v", err)
-		http.Error(w, "Gridlock resolution failed", http.StatusInternalServerError)
+		jsonError(w, "Gridlock resolution failed", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "COMPLETED", "settled": settled})
@@ -946,11 +964,11 @@ func (s *Server) handleCancelPayment(w http.ResponseWriter, r *http.Request) {
 	}
 	cancelled, err := s.Ledger.RecallPayment(r.Context(), msgID)
 	if err != nil {
-		http.Error(w, "Recall failed", http.StatusInternalServerError)
+		jsonError(w, "Recall failed", http.StatusInternalServerError)
 		return
 	}
 	if !cancelled {
-		http.Error(w, "Payment cannot be cancelled unless it is PENDING or QUEUED", http.StatusConflict)
+		jsonError(w, "Payment cannot be cancelled unless it is PENDING or QUEUED", http.StatusConflict)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"msg_id": msgID, "status": "CANCELLED"})
@@ -979,7 +997,7 @@ func (s *Server) handleCreateForwardDated(w http.ResponseWriter, r *http.Request
 	}
 	if err := s.Ledger.CreateForwardDated(r.Context(), req.MsgID, senderBic, req.ReceiverBIC, req.Amount, execDate); err != nil {
 		log.Printf("Failed to create forward dated: %v", err)
-		http.Error(w, "Failed to create forward dated payment", http.StatusInternalServerError)
+		jsonError(w, "Failed to create forward dated payment", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"msg_id": req.MsgID, "status": "SCHEDULED"})
@@ -988,7 +1006,7 @@ func (s *Server) handleCreateForwardDated(w http.ResponseWriter, r *http.Request
 func (s *Server) handleListForwardDated(w http.ResponseWriter, r *http.Request) {
 	items, err := s.Ledger.ListForwardDated(r.Context())
 	if err != nil {
-		http.Error(w, "Failed to list forward dated payments", http.StatusInternalServerError)
+		jsonError(w, "Failed to list forward dated payments", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, items)
@@ -1002,11 +1020,11 @@ func (s *Server) handleCancelForwardDated(w http.ResponseWriter, r *http.Request
 	}
 	removed, err := s.Ledger.CancelForwardDated(r.Context(), id)
 	if err != nil {
-		http.Error(w, "Failed to cancel", http.StatusInternalServerError)
+		jsonError(w, "Failed to cancel", http.StatusInternalServerError)
 		return
 	}
 	if !removed {
-		http.Error(w, "Not found or already executed", http.StatusNotFound)
+		jsonError(w, "Not found or already executed", http.StatusNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"id": id, "status": "CANCELLED"})
@@ -1045,7 +1063,7 @@ func (s *Server) handleCreateStandingOrder(w http.ResponseWriter, r *http.Reques
 	}
 	if err := s.Ledger.CreateStandingOrder(r.Context(), req.Reference, senderBic, req.ReceiverBIC, req.Amount, req.Frequency, nextDate, endDate); err != nil {
 		log.Printf("Failed to create standing order: %v", err)
-		http.Error(w, "Failed to create standing order", http.StatusInternalServerError)
+		jsonError(w, "Failed to create standing order", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"reference": req.Reference, "status": "ACTIVE"})
@@ -1054,7 +1072,7 @@ func (s *Server) handleCreateStandingOrder(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleListStandingOrders(w http.ResponseWriter, r *http.Request) {
 	items, err := s.Ledger.ListStandingOrders(r.Context())
 	if err != nil {
-		http.Error(w, "Failed to list standing orders", http.StatusInternalServerError)
+		jsonError(w, "Failed to list standing orders", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, items)
@@ -1068,7 +1086,7 @@ func (s *Server) handleGetStandingOrder(w http.ResponseWriter, r *http.Request) 
 	}
 	item, err := s.Ledger.GetStandingOrder(r.Context(), id)
 	if err != nil {
-		http.Error(w, "Standing order not found", http.StatusNotFound)
+		jsonError(w, "Standing order not found", http.StatusNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, item)
@@ -1107,7 +1125,7 @@ func (s *Server) handleUpdateStandingOrder(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	if err := s.Ledger.UpdateStandingOrder(r.Context(), id, req.Frequency, req.Amount, nextDate, endDate); err != nil {
-		http.Error(w, "Failed to update standing order", http.StatusInternalServerError)
+		jsonError(w, "Failed to update standing order", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"id": id, "status": "UPDATED"})
@@ -1120,7 +1138,7 @@ func (s *Server) handleCancelStandingOrder(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := s.Ledger.CancelStandingOrder(r.Context(), id); err != nil {
-		http.Error(w, "Failed to cancel standing order", http.StatusInternalServerError)
+		jsonError(w, "Failed to cancel standing order", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"id": id, "status": "CANCELLED"})
@@ -1143,7 +1161,7 @@ func (s *Server) handleCreateBulkSubmission(w http.ResponseWriter, r *http.Reque
 	senderBic := auth.BICFromContext(r.Context())
 	id, err := s.Ledger.CreateBulkSubmission(r.Context(), req.Filename, senderBic, req.TotalItems, req.TotalValue)
 	if err != nil {
-		http.Error(w, "Failed to create bulk submission", http.StatusInternalServerError)
+		jsonError(w, "Failed to create bulk submission", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id, "status": "RECEIVED"})
@@ -1157,7 +1175,7 @@ func (s *Server) handleGetBulkSubmission(w http.ResponseWriter, r *http.Request)
 	}
 	sub, err := s.Ledger.GetBulkSubmission(r.Context(), id)
 	if err != nil {
-		http.Error(w, "Bulk submission not found", http.StatusNotFound)
+		jsonError(w, "Bulk submission not found", http.StatusNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, sub)
@@ -1166,7 +1184,7 @@ func (s *Server) handleGetBulkSubmission(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleListBulkSubmissions(w http.ResponseWriter, r *http.Request) {
 	items, err := s.Ledger.ListBulkSubmissions(r.Context())
 	if err != nil {
-		http.Error(w, "Failed to list bulk submissions", http.StatusInternalServerError)
+		jsonError(w, "Failed to list bulk submissions", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, items)
@@ -1175,7 +1193,7 @@ func (s *Server) handleListBulkSubmissions(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleGetCurrentDNS(w http.ResponseWriter, r *http.Request) {
 	cycle, err := s.Ledger.GetCurrentDNS(r.Context())
 	if err != nil {
-		http.Error(w, "No open DNS cycle", http.StatusNotFound)
+		jsonError(w, "No open DNS cycle", http.StatusNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, cycle)
@@ -1184,7 +1202,7 @@ func (s *Server) handleGetCurrentDNS(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCloseDNSCycle(w http.ResponseWriter, r *http.Request) {
 	netResults, err := s.Ledger.CloseDNSCycle(r.Context())
 	if err != nil {
-		http.Error(w, fmt.Sprintf("DNS close failed: %v", err), http.StatusInternalServerError)
+		jsonError(w, fmt.Sprintf("DNS close failed: %v", err), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "CLOSED", "net_positions": netResults})
@@ -1193,7 +1211,7 @@ func (s *Server) handleCloseDNSCycle(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetDNSHistory(w http.ResponseWriter, r *http.Request) {
 	history, err := s.Ledger.GetDNSHistory(r.Context())
 	if err != nil {
-		http.Error(w, "Failed to get DNS history", http.StatusInternalServerError)
+		jsonError(w, "Failed to get DNS history", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, history)
@@ -1207,7 +1225,7 @@ func (s *Server) handleGetPrefunded(w http.ResponseWriter, r *http.Request) {
 	}
 	bal, err := s.Ledger.GetPrefundedBalance(r.Context(), bic)
 	if err != nil {
-		http.Error(w, "Participant not found", http.StatusNotFound)
+		jsonError(w, "Participant not found", http.StatusNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, bal)

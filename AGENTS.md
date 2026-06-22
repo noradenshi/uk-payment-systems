@@ -8,7 +8,7 @@ ukps/                          # Root — UK Payment Systems (uni project)
 ├── .gitignore
 ├── bacs-service/              # IMPLEMENTED — BACS (Standard 18), batch settlement, Go backend
 ├── fps-service/               # IMPLEMENTED — FPS (ISO 20022 + ISO 8583), near-real-time, Go backend
-├── chaps-service/             # IMPLEMENTED — CHAPS (ISO 20022), RTGS, Go + React
+├── chaps-service/             # IMPLEMENTED — CHAPS (ISO 20022), RTGS, Go backend
 ```
 
 Three services mimic the UK interbank payment network. All three services have fully implemented Go backends with real business logic.
@@ -42,7 +42,6 @@ The most important codebase for patterns to copy.
 | `pkg/iso20022/` | XML struct models for pacs.008, pacs.002, Business Application Header |
 | `pkg/validator/` | XSD schema registry + envelope validation via libxml2 |
 | `internal/db/` | SQL migrations: `01_init.sql` (schema), `02_seed.sql` (4 banks) |
-| `web/chaps-gui/` | React 18 + Vite 5 + TypeScript 5 operator dashboard |
 | `xsd/` | ISO 20022 XSD files (pacs.008, pacs.002, head.001, chaps_wrapper) |
 | `test/` | Sample XML payloads for manual testing |
 
@@ -153,13 +152,6 @@ A trigger on `journal_entries` fires `pg_notify('liquidity_event', account_bic)`
 - Error sentinel values: `var ErrX = errors.New("...")`
 - `pkg/events/events.go` — in-memory EventBus for SSE real-time notifications
 
-### Frontend conventions
-- React 18 with TypeScript, plain CSS (no CSS framework)
-- Vite dev proxy: `/v1` → `localhost:8080`
-- API client in `api.ts` with generic `request<T>()` wrapper
-- Types in `types.ts` matching Go struct JSON tags
-- Polish language UI labels
-
 ### Docker conventions
 - Multi-stage build: `golang:1.26-alpine` → `alpine:3.23`
 - Static link libxml2 with CGO (CHAPS and FPS only; BACS is CGO-free)
@@ -179,7 +171,6 @@ A trigger on `journal_entries` fires `pg_notify('liquidity_event', account_bic)`
 - Integration smoke test: `test/integration_test.sh` — runs HTTP smoke tests (participants, cycles, etc.)
 - When adding tests:
   - Go: `_test.go` files alongside source with `package X_test`
-  - Frontend: Vitest or React Testing Library
   - SQL: use Docker compose-dev + manual seed verification
 
 ### SSE real-time events
@@ -330,7 +321,7 @@ Scheduler starts in `main.go` via `srv.StartScheduler(schedCtx)` and stops clean
 └──────────────────┘    └──────────────────┘    └──────────────────┘
 ```
 
-Each service is an independent Go binary + optional React GUI, deployable together via Docker Compose. They communicate with external systems via HTTP (all three), ISO 8583 TCP socket (FPS), or file upload (BACS). There is **no direct inter-service database access** — each service has its own isolated PostgreSQL instance with its own participant registry.
+Each service is an independent Go binary, deployable together via Docker Compose. They communicate with external systems via HTTP (all three), ISO 8583 TCP socket (FPS), or file upload (BACS). There is **no direct inter-service database access** — each service has its own isolated PostgreSQL instance with its own participant registry.
 
 Each service maintains its own `participant_profiles` table with scheme-specific columns:
 

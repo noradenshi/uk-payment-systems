@@ -76,6 +76,12 @@ func writeJSON(w http.ResponseWriter, status int, payload interface{}) {
 	}
 }
 
+func jsonError(w http.ResponseWriter, msg string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
 func badRequest(w http.ResponseWriter, message string) {
 	writeJSON(w, http.StatusBadRequest, map[string]string{"error": message})
 }
@@ -132,7 +138,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		jsonError(w, "streaming not supported", http.StatusInternalServerError)
 		return
 	}
 
@@ -231,11 +237,11 @@ func (s *Server) GetPayment(w http.ResponseWriter, r *http.Request) {
 	details, err := s.Ledger.GetPaymentDetails(r.Context(), msgID)
 	if err != nil {
 		if errors.Is(err, ledger.ErrAccountNotFound) {
-			http.Error(w, "Payment not found", http.StatusNotFound)
+			jsonError(w, "Payment not found", http.StatusNotFound)
 			return
 		}
 		log.Printf("Query error for %s: %v", msgID, err)
-		http.Error(w, "Payment not found", http.StatusNotFound)
+		jsonError(w, "Payment not found", http.StatusNotFound)
 		return
 	}
 
@@ -257,7 +263,7 @@ func (s *Server) handleListPayments(w http.ResponseWriter, r *http.Request) {
 	payments, err := s.Ledger.ListPayments(r.Context(), strings.ToUpper(r.URL.Query().Get("status")), limit)
 	if err != nil {
 		log.Printf("Failed to list payments: %v", err)
-		http.Error(w, "Failed to list payments", http.StatusInternalServerError)
+		jsonError(w, "Failed to list payments", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, payments)
@@ -267,7 +273,7 @@ func (s *Server) handleListParticipants(w http.ResponseWriter, r *http.Request) 
 	participants, err := s.Ledger.ListParticipants(r.Context())
 	if err != nil {
 		log.Printf("Failed to list participants: %v", err)
-		http.Error(w, "Failed to list participants", http.StatusInternalServerError)
+		jsonError(w, "Failed to list participants", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, participants)
@@ -295,7 +301,7 @@ func (s *Server) handleUpdateParticipantStatus(w http.ResponseWriter, r *http.Re
 	}
 	if err := s.Ledger.UpdateParticipantStatus(r.Context(), bic, req.Status, req.Reason); err != nil {
 		log.Printf("Failed to update participant %s: %v", bic, err)
-		http.Error(w, "Failed to update participant", http.StatusInternalServerError)
+		jsonError(w, "Failed to update participant", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"bic": bic, "status": req.Status})
@@ -335,7 +341,7 @@ func (s *Server) handleUpdateParticipant(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		log.Printf("Failed to update participant %s: %v", bic, err)
-		http.Error(w, "Failed to update participant", http.StatusInternalServerError)
+		jsonError(w, "Failed to update participant", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"bic": bic, "status": "updated"})
@@ -357,7 +363,7 @@ func (s *Server) handleDeleteParticipant(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		log.Printf("Failed to delete participant %s: %v", bic, err)
-		http.Error(w, "Failed to delete participant", http.StatusInternalServerError)
+		jsonError(w, "Failed to delete participant", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"bic": bic, "status": "deleted"})
@@ -373,11 +379,11 @@ func (s *Server) handleGetBlock(w http.ResponseWriter, r *http.Request) {
 	details, err := s.Ledger.GetBlockDetails(r.Context(), bic)
 	if err != nil {
 		if errors.Is(err, ledger.ErrParticipantNotFound) {
-			http.Error(w, "Participant not found", http.StatusNotFound)
+			jsonError(w, "Participant not found", http.StatusNotFound)
 			return
 		}
 		log.Printf("Block details error for %s: %v", bic, err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		jsonError(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, details)
@@ -416,7 +422,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	apiKey, err := s.Ledger.RegisterParticipant(r.Context(), req.BIC, req.Name, req.SortCode, req.Balance)
 	if err != nil {
 		log.Printf("Failed to register participant %s: %v", req.BIC, err)
-		http.Error(w, "Failed to create participant", http.StatusInternalServerError)
+		jsonError(w, "Failed to create participant", http.StatusInternalServerError)
 		return
 	}
 
@@ -437,7 +443,7 @@ func (s *Server) handleGetPosition(w http.ResponseWriter, r *http.Request) {
 	pos, err := s.Ledger.GetPosition(r.Context(), bic)
 	if err != nil {
 		log.Printf("Error fetching position for %s: %v", bic, err)
-		http.Error(w, "Participant not found", http.StatusNotFound)
+		jsonError(w, "Participant not found", http.StatusNotFound)
 		return
 	}
 
@@ -463,7 +469,7 @@ func (s *Server) handleTopUp(w http.ResponseWriter, r *http.Request) {
 	err := s.Ledger.TopUpLiquidity(r.Context(), bic, req.Amount)
 	if err != nil {
 		log.Printf("Liquidity top-up failed for %s: %v", bic, err)
-		http.Error(w, "Failed to update liquidity", http.StatusInternalServerError)
+		jsonError(w, "Failed to update liquidity", http.StatusInternalServerError)
 		return
 	}
 
@@ -491,7 +497,7 @@ func (s *Server) handleBlockParticipant(w http.ResponseWriter, r *http.Request) 
 	err := s.Ledger.BlockParticipant(r.Context(), bic, reason)
 	if err != nil {
 		log.Printf("Failed to block %s: %v", bic, err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		jsonError(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
@@ -507,7 +513,7 @@ func (s *Server) handleUnblockParticipant(w http.ResponseWriter, r *http.Request
 
 	err := s.Ledger.UnblockParticipant(r.Context(), bic)
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		jsonError(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
@@ -533,14 +539,14 @@ func (s *Server) ProcessPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Error(w, "Unsupported Media Type: use application/json or application/xml", http.StatusUnsupportedMediaType)
+	jsonError(w, "Unsupported Media Type: use application/json or application/xml", http.StatusUnsupportedMediaType)
 }
 
 func (s *Server) processXMLPayment(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		log.Printf("IO Error reading request body: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		jsonError(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 	defer r.Body.Close()
@@ -583,7 +589,7 @@ func (s *Server) processXMLPayment(w http.ResponseWriter, r *http.Request) {
 	res, err := s.Ledger.SettlePayment(r.Context(), msg.MsgId, msg.Sender, msg.DestBIC, msg.Amount, msg.EndToEndId, msg.SenderSortCode, msg.DestSortCode, "")
 	if err != nil {
 		log.Printf("[CRITICAL] Ledger system failure for MsgId %s: %v", msg.MsgId, err)
-		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+		jsonError(w, "Service Unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -636,8 +642,17 @@ func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "Invalid request body")
 		return
 	}
-	if req.MsgID == "" || req.ReceiverBIC == "" || req.Amount <= 0 {
-		badRequest(w, "msg_id, receiver_bic, and positive amount are required")
+
+	msgID := req.MsgID
+	if idKey := r.Header.Get("Idempotency-Key"); idKey != "" {
+		if msgID != "" && msgID != idKey {
+			jsonError(w, "msg_id in body differs from Idempotency-Key header", http.StatusConflict)
+			return
+		}
+		msgID = idKey
+	}
+	if msgID == "" || req.ReceiverBIC == "" || req.Amount <= 0 {
+		badRequest(w, "msg_id (or Idempotency-Key), receiver_bic, and positive amount are required")
 		return
 	}
 	if !validateBIC(req.ReceiverBIC) {
@@ -652,7 +667,7 @@ func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "receiver_account is required")
 		return
 	}
-	if len(req.MsgID) > 35 {
+	if len(msgID) > 35 {
 		badRequest(w, "msg_id exceeds 35 character limit")
 		return
 	}
@@ -666,14 +681,14 @@ func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 	senderSortCode, err := s.Ledger.GetSortCode(r.Context(), senderBic)
 	if err != nil {
 		log.Printf("Failed to lookup sender sort code for %s: %v", senderBic, err)
-		http.Error(w, "Sender not found", http.StatusInternalServerError)
+		jsonError(w, "Sender not found", http.StatusInternalServerError)
 		return
 	}
 
-	res, err := s.Ledger.SettlePayment(r.Context(), req.MsgID, senderBic, req.ReceiverBIC, req.Amount, req.EndToEndID, senderSortCode, req.ReceiverSortCode, "")
+	res, err := s.Ledger.SettlePayment(r.Context(), msgID, senderBic, req.ReceiverBIC, req.Amount, req.EndToEndID, senderSortCode, req.ReceiverSortCode, "")
 	if err != nil {
-		log.Printf("[CRITICAL] Ledger system failure for MsgId %s: %v", req.MsgID, err)
-		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+		log.Printf("[CRITICAL] Ledger system failure for MsgId %s: %v", msgID, err)
+		jsonError(w, "Service Unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -692,7 +707,7 @@ func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 		s.Events.Publish(req.ReceiverBIC, events.Event{
 			Type: "payment.received",
 			Data: map[string]interface{}{
-				"msg_id":           req.MsgID,
+				"msg_id":           msgID,
 				"sender":           senderBic,
 				"receiver":         req.ReceiverBIC,
 				"receiver_sort_code": req.ReceiverSortCode,
@@ -706,7 +721,7 @@ func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("X-Transaction-Status", res.Status)
 	writeJSON(w, httpStatus, map[string]string{
-		"msg_id":      req.MsgID,
+		"msg_id":      msgID,
 		"status":      status,
 		"iso_status":  res.Status,
 		"reason_code": res.ReasonCode,
@@ -726,7 +741,7 @@ func (s *Server) handleValidatePayment(w http.ResponseWriter, r *http.Request) {
 	result, err := s.Ledger.ValidatePayment(r.Context(), req.SenderBIC, req.ReceiverBIC, req.Amount)
 	if err != nil {
 		log.Printf("Validation failed: %v", err)
-		http.Error(w, "Validation failed", http.StatusInternalServerError)
+		jsonError(w, "Validation failed", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
@@ -740,7 +755,7 @@ func (s *Server) handleGetLimits(w http.ResponseWriter, r *http.Request) {
 	}
 	limits, err := s.Ledger.GetClearingLimits(r.Context(), strings.ToUpper(bic))
 	if err != nil {
-		http.Error(w, "Limits unavailable", http.StatusNotFound)
+		jsonError(w, "Limits unavailable", http.StatusNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, limits)
@@ -765,7 +780,7 @@ func (s *Server) handleUpdateLimit(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.Ledger.UpdateOverdraftLimit(r.Context(), bic, *req.OverdraftLimit); err != nil {
 		log.Printf("Failed to update overdraft limit for %s: %v", bic, err)
-		http.Error(w, "Failed to update limit", http.StatusInternalServerError)
+		jsonError(w, "Failed to update limit", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"bic": bic, "overdraft_limit": *req.OverdraftLimit})
@@ -775,7 +790,7 @@ func (s *Server) handleResolveGridlock(w http.ResponseWriter, r *http.Request) {
 	settled, err := s.Ledger.ResolveGridlock(r.Context())
 	if err != nil {
 		log.Printf("Gridlock resolution failed: %v", err)
-		http.Error(w, "Gridlock resolution failed", http.StatusInternalServerError)
+		jsonError(w, "Gridlock resolution failed", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "COMPLETED", "settled": settled})
@@ -790,13 +805,13 @@ func (s *Server) handleAuthorizePayment(w http.ResponseWriter, r *http.Request) 
 
 	details, err := s.Ledger.GetPaymentDetails(r.Context(), msgID)
 	if err != nil {
-		http.Error(w, "Payment not found", http.StatusNotFound)
+		jsonError(w, "Payment not found", http.StatusNotFound)
 		return
 	}
 
 	status, _ := details["status"].(string)
 	if status != "PENDING" && status != "QUEUED" {
-		http.Error(w, "Only pending or queued payments can be authorized", http.StatusConflict)
+		jsonError(w, "Only pending or queued payments can be authorized", http.StatusConflict)
 		return
 	}
 
@@ -810,7 +825,7 @@ func (s *Server) handleAuthorizePayment(w http.ResponseWriter, r *http.Request) 
 	result, err := s.Ledger.SettlePayment(r.Context(), msgID, sender, receiver, amount, endToEndID, senderSortCode, receiverSortCode, "")
 	if err != nil {
 		log.Printf("AuthorizePayment settle error: %v", err)
-		http.Error(w, "Authorization failed", http.StatusInternalServerError)
+		jsonError(w, "Authorization failed", http.StatusInternalServerError)
 		return
 	}
 
@@ -838,11 +853,11 @@ func (s *Server) handleCancelPayment(w http.ResponseWriter, r *http.Request) {
 
 	cancelled, err := s.Ledger.CancelPayment(r.Context(), msgID)
 	if err != nil {
-		http.Error(w, "Cancel failed", http.StatusInternalServerError)
+		jsonError(w, "Cancel failed", http.StatusInternalServerError)
 		return
 	}
 	if !cancelled {
-		http.Error(w, "Payment cannot be cancelled unless it is PENDING or QUEUED", http.StatusConflict)
+		jsonError(w, "Payment cannot be cancelled unless it is PENDING or QUEUED", http.StatusConflict)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"msg_id": msgID, "status": "CANCELLED"})
@@ -865,11 +880,11 @@ func (s *Server) handleAmendPayment(w http.ResponseWriter, r *http.Request) {
 
 	amended, err := s.Ledger.AmendPayment(r.Context(), msgID, req.EndToEndID)
 	if err != nil {
-		http.Error(w, "Amend failed", http.StatusInternalServerError)
+		jsonError(w, "Amend failed", http.StatusInternalServerError)
 		return
 	}
 	if !amended {
-		http.Error(w, "Payment cannot be amended unless it is PENDING", http.StatusConflict)
+		jsonError(w, "Payment cannot be amended unless it is PENDING", http.StatusConflict)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"msg_id": msgID, "status": "AMENDED"})
