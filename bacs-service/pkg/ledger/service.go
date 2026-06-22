@@ -292,10 +292,28 @@ func (s *LedgerService) CloseInputDay(ctx context.Context, processingInterval, s
 }
 
 func (s *LedgerService) ProcessCycle(ctx context.Context) error {
-	_, err := s.Pool.Exec(ctx, `
-		UPDATE bacs_cycles SET status = 'AWAITING_SETTLEMENT'
-		WHERE status = 'PROCESSING'`)
-	return err
+	return pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+		var cycleID int
+		err := tx.QueryRow(ctx, `
+			SELECT id FROM bacs_cycles WHERE status = 'PROCESSING'
+			ORDER BY created_at ASC LIMIT 1 FOR UPDATE`).Scan(&cycleID)
+		if err != nil {
+			return err
+		}
+
+		_, err = tx.Exec(ctx, `
+			UPDATE bacs_transactions SET status = 'PROCESSED'
+			WHERE submission_id IN (SELECT id FROM bacs_submissions WHERE cycle_id = $1 AND status = 'ACCEPTED')
+			  AND status = 'PENDING'`, cycleID)
+		if err != nil {
+			return err
+		}
+
+		_, err = tx.Exec(ctx, `
+			UPDATE bacs_cycles SET status = 'AWAITING_SETTLEMENT'
+			WHERE id = $1`, cycleID)
+		return err
+	})
 }
 
 func (s *LedgerService) SettleCycle(ctx context.Context) ([]string, error) {
@@ -331,13 +349,22 @@ func (s *LedgerService) SettleCycle(ctx context.Context) ([]string, error) {
 				JOIN bacs_submissions s ON s.id = t.submission_id
 				WHERE s.cycle_id = $1 AND s.status = 'ACCEPTED'
 				  AND t.debtor_bic IS NOT NULL AND t.creditor_bic IS NOT NULL
+				  AND t.status = 'PROCESSED'
+				GROUP BY t.debtor_bic, t.creditor_bic
+			),
+			returns AS (
+				SELECT t.debtor_bic, t.creditor_bic, SUM(r.amount) AS amount
+				FROM bacs_returns r
+				JOIN bacs_transactions t ON t.id = r.original_transaction_id
+				JOIN bacs_submissions s ON s.id = t.submission_id
+				WHERE s.cycle_id = $1
 				GROUP BY t.debtor_bic, t.creditor_bic
 			),
 			netted AS (
 				SELECT g.debtor_bic, g.creditor_bic, g.amount AS gross_amount,
 					   GREATEST(g.amount - COALESCE(r.amount, 0), 0) AS net_amount
 				FROM gross g
-				LEFT JOIN gross r ON r.debtor_bic = g.creditor_bic AND r.creditor_bic = g.debtor_bic
+				LEFT JOIN returns r ON r.debtor_bic = g.creditor_bic AND r.creditor_bic = g.debtor_bic
 			)
 			SELECT $1, debtor_bic, creditor_bic, gross_amount, net_amount
 			FROM netted
@@ -390,11 +417,13 @@ func (s *LedgerService) SettleCycle(ctx context.Context) ([]string, error) {
 		}
 		rows.Close()
 
+		anyFailed := false
 		for _, item := range settlements {
 			bics = append(bics, item.bic)
-			status := "SETTLED"
+			posStatus := "SETTLED"
 			if item.balance+item.netAmount < -item.overdraftLimit {
-				status = "BLOCKED"
+				posStatus = "FAILED"
+				anyFailed = true
 				if _, err = tx.Exec(ctx, `
 					UPDATE participant_statuses
 					SET status='SUSPENDED', block_reason='BACS_SESSION_LIQUIDITY_SHORTFALL',
@@ -406,17 +435,81 @@ func (s *LedgerService) SettleCycle(ctx context.Context) ([]string, error) {
 				if _, err = tx.Exec(ctx, `UPDATE participant_liquidity SET balance = balance + $1, updated_at = NOW() WHERE bic_code = $2`, item.netAmount, item.bic); err != nil {
 					return err
 				}
-				if _, err = tx.Exec(ctx, `INSERT INTO bacs_journal_entries (submission_id, account_bic, amount) VALUES (NULL, $1, $2)`, item.bic, item.netAmount); err != nil {
-					return err
-				}
 			}
 			if _, err = tx.Exec(ctx, `
 				INSERT INTO bacs_net_positions (cycle_id, bic_code, net_position, balance_before, overdraft_limit, status)
-				VALUES ($1,$2,$3,$4,$5,$6)`, cycleID, item.bic, item.netAmount, item.balance, item.overdraftLimit, status); err != nil {
+				VALUES ($1,$2,$3,$4,$5,$6)`, cycleID, item.bic, item.netAmount, item.balance, item.overdraftLimit, posStatus); err != nil {
 				return err
 			}
 		}
-		_, err = tx.Exec(ctx, `UPDATE bacs_cycles SET status = 'SETTLED' WHERE id = $1`, cycleID)
+
+		// Per-transaction journals and status updates
+		txRows, err := tx.Query(ctx, `
+			SELECT t.id, t.debtor_bic, t.creditor_bic, t.amount
+			FROM bacs_transactions t
+			JOIN bacs_submissions s ON s.id = t.submission_id
+			WHERE s.cycle_id = $1 AND s.status = 'ACCEPTED' AND t.status = 'PROCESSED'
+			ORDER BY t.id`, cycleID)
+		if err != nil {
+			return err
+		}
+		type txRec struct {
+			id          int
+			debtor      string
+			creditor    string
+			amount      float64
+		}
+		var allTxns []txRec
+		for txRows.Next() {
+			var r txRec
+			if err := txRows.Scan(&r.id, &r.debtor, &r.creditor, &r.amount); err != nil {
+				txRows.Close()
+				return err
+			}
+			allTxns = append(allTxns, r)
+		}
+		txRows.Close()
+
+		// Build set of failed BICs
+		failedBICs := make(map[string]bool)
+		for _, item := range settlements {
+			if item.balance+item.netAmount < -item.overdraftLimit {
+				failedBICs[item.bic] = true
+			}
+		}
+
+		for _, t := range allTxns {
+			if failedBICs[t.debtor] || failedBICs[t.creditor] {
+				// Return this transaction
+				if _, err = tx.Exec(ctx, `UPDATE bacs_transactions SET status = 'RETURNED' WHERE id = $1`, t.id); err != nil {
+					return err
+				}
+				if _, err = tx.Exec(ctx, `INSERT INTO bacs_returns (original_transaction_id, reason_code, amount) VALUES ($1, 'LIQUIDITY', $2)`, t.id, t.amount); err != nil {
+					return err
+				}
+			} else {
+				// Settle this transaction
+				if _, err = tx.Exec(ctx, `UPDATE bacs_transactions SET status = 'SETTLED' WHERE id = $1`, t.id); err != nil {
+					return err
+				}
+				if _, err = tx.Exec(ctx, `
+					INSERT INTO bacs_journal_entries (transaction_id, account_bic, amount)
+					VALUES ($1, $2, $3)`, t.id, t.debtor, -t.amount); err != nil {
+					return err
+				}
+				if _, err = tx.Exec(ctx, `
+					INSERT INTO bacs_journal_entries (transaction_id, account_bic, amount)
+					VALUES ($1, $2, $3)`, t.id, t.creditor, t.amount); err != nil {
+					return err
+				}
+			}
+		}
+
+		cycleStatus := "SETTLED"
+		if anyFailed {
+			cycleStatus = "PARTIALLY_SETTLED"
+		}
+		_, err = tx.Exec(ctx, `UPDATE bacs_cycles SET status = $1 WHERE id = $2`, cycleStatus, cycleID)
 		return err
 	})
 	return bics, err
@@ -666,8 +759,8 @@ func (s *LedgerService) CreateMandate(ctx context.Context, ref, suBic, payerName
 		frequency = "MONTHLY"
 	}
 	err := s.Pool.QueryRow(ctx, `
-		INSERT INTO bacs_mandates (reference, su_bic, payer_name, payer_sort_code, payer_account, amount, frequency)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO bacs_mandates (reference, su_bic, payer_name, payer_sort_code, payer_account, amount, frequency, next_execution_date)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + INTERVAL '1 day')
 		RETURNING id`, ref, suBic, payerName, sortCode, account, amount, frequency).Scan(&id)
 	return id, err
 }
@@ -677,11 +770,12 @@ func (s *LedgerService) GetMandate(ctx context.Context, ref string) (map[string]
 	var suBic string
 	var payerName, payerSortCode, payerAccount, frequency, status *string
 	var amount *float64
+	var nextExec *time.Time
 	var createdAt time.Time
 	err := s.Pool.QueryRow(ctx, `
-		SELECT id, su_bic, payer_name, payer_sort_code, payer_account, amount, frequency, status, created_at
+		SELECT id, su_bic, payer_name, payer_sort_code, payer_account, amount, frequency, status, next_execution_date, created_at
 		FROM bacs_mandates WHERE reference = $1`, ref).
-		Scan(&id, &suBic, &payerName, &payerSortCode, &payerAccount, &amount, &frequency, &status, &createdAt)
+		Scan(&id, &suBic, &payerName, &payerSortCode, &payerAccount, &amount, &frequency, &status, &nextExec, &createdAt)
 	if err != nil {
 		return nil, err
 	}
@@ -709,11 +803,14 @@ func (s *LedgerService) GetMandate(ctx context.Context, ref string) (map[string]
 	if status != nil {
 		m["status"] = *status
 	}
+	if nextExec != nil {
+		m["next_execution_date"] = nextExec.Format(time.RFC3339)
+	}
 	return m, nil
 }
 
 func (s *LedgerService) ListMandates(ctx context.Context, suBic string) ([]map[string]interface{}, error) {
-	query := `SELECT id, reference, su_bic, payer_name, payer_sort_code, payer_account, amount, frequency, status, created_at FROM bacs_mandates`
+	query := `SELECT id, reference, su_bic, payer_name, payer_sort_code, payer_account, amount, frequency, status, next_execution_date, created_at FROM bacs_mandates`
 	args := []interface{}{}
 	if suBic != "" {
 		query += " WHERE su_bic = $1"
@@ -732,8 +829,9 @@ func (s *LedgerService) ListMandates(ctx context.Context, suBic string) ([]map[s
 		var ref, suBic2 string
 		var payerName, payerSortCode, payerAccount, frequency, status *string
 		var amount *float64
+		var nextExec *time.Time
 		var createdAt time.Time
-		if err := rows.Scan(&id, &ref, &suBic2, &payerName, &payerSortCode, &payerAccount, &amount, &frequency, &status, &createdAt); err != nil {
+		if err := rows.Scan(&id, &ref, &suBic2, &payerName, &payerSortCode, &payerAccount, &amount, &frequency, &status, &nextExec, &createdAt); err != nil {
 			return nil, err
 		}
 		m := map[string]interface{}{
@@ -759,6 +857,9 @@ func (s *LedgerService) ListMandates(ctx context.Context, suBic string) ([]map[s
 		}
 		if status != nil {
 			m["status"] = *status
+		}
+		if nextExec != nil {
+			m["next_execution_date"] = nextExec.Format(time.RFC3339)
 		}
 		result = append(result, m)
 	}
@@ -1041,6 +1142,111 @@ func (s *LedgerService) AdvanceCycles(ctx context.Context, processingDuration, s
 		}
 	}
 	return nil
+}
+
+// ── AUDDIS (Automated Direct Debit Instruction Service) ──
+
+func (s *LedgerService) ExecuteMandates(ctx context.Context) (int, error) {
+	executed := 0
+	err := pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT m.id, m.reference, m.su_bic, m.payer_sort_code, m.payer_account, m.amount, m.frequency
+			FROM bacs_mandates m
+			WHERE m.status = 'ACTIVE'
+			  AND m.next_execution_date IS NOT NULL
+			  AND m.next_execution_date <= NOW()
+			ORDER BY m.next_execution_date ASC
+			FOR UPDATE OF m SKIP LOCKED`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		type mandateItem struct {
+			id         int
+			ref        string
+			suBic      string
+			sortCode   string
+			account    string
+			amount     float64
+			frequency  string
+		}
+		var mandates []mandateItem
+		for rows.Next() {
+			var m mandateItem
+			if err := rows.Scan(&m.id, &m.ref, &m.suBic, &m.sortCode, &m.account, &m.amount, &m.frequency); err != nil {
+				return err
+			}
+			mandates = append(mandates, m)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		rows.Close()
+
+		if len(mandates) == 0 {
+			return nil
+		}
+
+		// Find or create an OPEN cycle
+		var cycleID int
+		err = tx.QueryRow(ctx, `SELECT id FROM bacs_cycles WHERE status = 'OPEN' ORDER BY created_at DESC LIMIT 1 FOR UPDATE`).Scan(&cycleID)
+		if err != nil {
+			// Create a new cycle
+			err = tx.QueryRow(ctx, `
+				INSERT INTO bacs_cycles (input_date, processing_date, settlement_date, status)
+				VALUES (CURRENT_DATE, CURRENT_DATE + 1, CURRENT_DATE + 2, 'OPEN')
+				RETURNING id`).Scan(&cycleID)
+			if err != nil {
+				return err
+			}
+		}
+
+		for _, m := range mandates {
+			// Create a submission for this mandate execution
+			var submissionID string
+			err = tx.QueryRow(ctx, `
+				INSERT INTO bacs_submissions (filename, su_bic, total_volume, total_value, status, cycle_id)
+				VALUES ($1, $2, 1, $3, 'ACCEPTED', $4)
+				RETURNING id`,
+				fmt.Sprintf("AUDDIS-%s-%s", m.ref, time.Now().Format("20060102")),
+				m.suBic, m.amount, cycleID).Scan(&submissionID)
+			if err != nil {
+				return err
+			}
+
+			// Create a direct debit transaction
+			_, err = tx.Exec(ctx, `
+				INSERT INTO bacs_transactions (submission_id, record_type, volume_header_no, dest_sort_code, dest_account, debtor_bic, creditor_bic, amount, originator_ref, reference, su_code, status)
+				VALUES ($1, 'DIRECT_DEBIT', 1, $2, $3, $4, $5, $6, $7, $7, '', 'PENDING')`,
+				submissionID, m.sortCode, m.account, m.suBic, m.suBic, m.amount, m.ref)
+			if err != nil {
+				return err
+			}
+
+			// Update next execution date
+			var nextDate time.Time
+			switch m.frequency {
+			case "WEEKLY":
+				nextDate = time.Now().AddDate(0, 0, 7)
+			case "MONTHLY":
+				nextDate = time.Now().AddDate(0, 1, 0)
+			case "QUARTERLY":
+				nextDate = time.Now().AddDate(0, 3, 0)
+			case "YEARLY":
+				nextDate = time.Now().AddDate(1, 0, 0)
+			default:
+				nextDate = time.Now().AddDate(0, 1, 0)
+			}
+			_, err = tx.Exec(ctx, `UPDATE bacs_mandates SET next_execution_date = $1 WHERE id = $2`, nextDate, m.id)
+			if err != nil {
+				return err
+			}
+			executed++
+		}
+		return nil
+	})
+	return executed, err
 }
 
 // ── Schedule ──

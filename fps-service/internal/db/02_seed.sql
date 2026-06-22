@@ -21,4 +21,4 @@ SELECT sd.bic, sd.bal
 FROM seed_data sd;
 
 INSERT INTO fps_dns_cycles (cycle_start, cycle_end, status)
-VALUES (NOW() - INTERVAL '2 hours', NOW() + INTERVAL '2 hours', 'OPEN');
+VALUES (NOW() - INTERVAL '2 hours', NOW() + INTERVAL '1 minute', 'OPEN');

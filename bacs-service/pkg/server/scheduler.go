@@ -50,6 +50,11 @@ func (s *Server) StartScheduler(ctx context.Context) {
 			if err := s.Ledger.AdvanceCycles(ctx, processingDuration, settlementDuration); err != nil {
 				log.Printf("Scheduler advance cycles: %v", err)
 			}
+			if n, err := s.Ledger.ExecuteMandates(ctx); err != nil {
+				log.Printf("Scheduler execute mandates: %v", err)
+			} else if n > 0 {
+				log.Printf("Scheduler executed %d mandate(s)", n)
+			}
 		}
 	}
 }

@@ -220,12 +220,19 @@ func (s *LedgerService) settleSIPOnce(ctx context.Context, msgID, sender, receiv
 		var currentStatus string
 		var existingSender, existingReceiver string
 		var existingAmount float64
+
+		var currentCycleID *int
+		var cid int
+		if err := tx.QueryRow(ctx, "SELECT id FROM fps_dns_cycles WHERE status='OPEN' LIMIT 1 FOR UPDATE").Scan(&cid); err == nil {
+			currentCycleID = &cid
+		}
+
 		err := tx.QueryRow(ctx, `
-			INSERT INTO fps_transactions (msg_id, sender_bic, receiver_bic, sender_sort_code, receiver_sort_code, amount, status, end_to_end_id, payment_type)
-			VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6, 'PENDING', $7, 'SIP')
+			INSERT INTO fps_transactions (msg_id, sender_bic, receiver_bic, sender_sort_code, receiver_sort_code, amount, status, end_to_end_id, payment_type, cycle_id)
+			VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6, 'PENDING', $7, 'SIP', $8)
 			ON CONFLICT (msg_id) DO UPDATE SET msg_id = EXCLUDED.msg_id
 			RETURNING id, status, sender_bic, receiver_bic, amount`,
-			msgID, sender, receiver, senderSortCode, receiverSortCode, amount, endToEndID).Scan(&internalUUID, &currentStatus, &existingSender, &existingReceiver, &existingAmount)
+			msgID, sender, receiver, senderSortCode, receiverSortCode, amount, endToEndID, currentCycleID).Scan(&internalUUID, &currentStatus, &existingSender, &existingReceiver, &existingAmount)
 		if err != nil {
 			return fmt.Errorf("failed to init: %w", err)
 		}
@@ -420,33 +427,58 @@ func (s *LedgerService) GetCurrentDNS(ctx context.Context) (map[string]interface
 }
 
 func (s *LedgerService) CloseDNSCycle(ctx context.Context) ([]map[string]interface{}, error) {
-	var cycleID int
-	var start, end time.Time
-	err := s.Pool.QueryRow(ctx, "SELECT id, cycle_start, cycle_end FROM fps_dns_cycles WHERE status='OPEN' LIMIT 1 FOR UPDATE").Scan(&cycleID, &start, &end)
-	if err != nil {
-		return nil, fmt.Errorf("no open DNS cycle")
-	}
-	rows, err := s.Pool.Query(ctx, `
-		SELECT bic_code, COALESCE(SUM(CASE WHEN bic_code = sender_bic THEN -amount WHEN bic_code = receiver_bic THEN amount ELSE 0 END), 0) AS net
-		FROM fps_transactions, participant_profiles
-		WHERE (sender_bic = bic_code OR receiver_bic = bic_code) AND status = 'QUEUED'
-		GROUP BY bic_code`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
 	var netResults []map[string]interface{}
-	for rows.Next() {
-		var bic string
-		var net float64
-		if err := rows.Scan(&bic, &net); err != nil {
-			return nil, err
+	err := pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+		var cycleID int
+		var start, end time.Time
+		err := tx.QueryRow(ctx, "SELECT id, cycle_start, cycle_end FROM fps_dns_cycles WHERE status='OPEN' LIMIT 1 FOR UPDATE").Scan(&cycleID, &start, &end)
+		if err != nil {
+			return fmt.Errorf("no open DNS cycle")
 		}
-		netResults = append(netResults, map[string]interface{}{"bic": bic, "net_position": net})
-	}
-	s.Pool.Exec(ctx, "UPDATE fps_transactions SET status='SETTLED' WHERE status='QUEUED'")
-	s.Pool.Exec(ctx, "UPDATE fps_dns_cycles SET status='CLOSED', settled_at=NOW() WHERE id=$1", cycleID)
-	return netResults, nil
+
+		rows, err := tx.Query(ctx, `
+			SELECT bic_code, COALESCE(SUM(CASE WHEN bic_code = sender_bic THEN -amount WHEN bic_code = receiver_bic THEN amount ELSE 0 END), 0) AS net
+			FROM fps_transactions, participant_profiles
+			WHERE (sender_bic = bic_code OR receiver_bic = bic_code) AND status = 'QUEUED' AND cycle_id = $1
+			GROUP BY bic_code`, cycleID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var bic string
+			var net float64
+			if err := rows.Scan(&bic, &net); err != nil {
+				return err
+			}
+			netResults = append(netResults, map[string]interface{}{"bic": bic, "net_position": net})
+			if net == 0 {
+				continue
+			}
+			var bal float64
+			if err := tx.QueryRow(ctx, "SELECT balance FROM participant_liquidity WHERE bic_code=$1 FOR UPDATE", bic).Scan(&bal); err != nil {
+				return fmt.Errorf("lock liquidity for %s: %w", bic, err)
+			}
+			if _, err := tx.Exec(ctx, "UPDATE participant_liquidity SET balance=balance+$1, updated_at=NOW() WHERE bic_code=$2", net, bic); err != nil {
+				return fmt.Errorf("settle net for %s: %w", bic, err)
+			}
+			if _, err := tx.Exec(ctx, "INSERT INTO fps_journal_entries (account_bic, amount, description) VALUES ($1, $2, 'DNS_CYCLE_NET')", bic, net); err != nil {
+				return fmt.Errorf("journal net for %s: %w", bic, err)
+			}
+		}
+		if rows.Err() != nil {
+			return rows.Err()
+		}
+
+		if _, err := tx.Exec(ctx, "UPDATE fps_transactions SET status='SETTLED' WHERE status='QUEUED' AND cycle_id=$1", cycleID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, "UPDATE fps_dns_cycles SET status='CLOSED', settled_at=NOW() WHERE id=$1", cycleID); err != nil {
+			return err
+		}
+		return nil
+	})
+	return netResults, err
 }
 
 func (s *LedgerService) GetDNSHistory(ctx context.Context) ([]map[string]interface{}, error) {

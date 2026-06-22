@@ -30,7 +30,7 @@ CREATE TABLE participant_statuses (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-CREATE TYPE cycle_status AS ENUM ('OPEN', 'PROCESSING', 'AWAITING_SETTLEMENT', 'SETTLED');
+CREATE TYPE cycle_status AS ENUM ('OPEN', 'PROCESSING', 'AWAITING_SETTLEMENT', 'SETTLED', 'PARTIALLY_SETTLED');
 CREATE TABLE bacs_cycles (
     id SERIAL PRIMARY KEY,
     input_date DATE NOT NULL,
@@ -104,6 +104,7 @@ CREATE TABLE bacs_mandates (
     amount DECIMAL(20, 2),
     frequency VARCHAR(10) DEFAULT 'MONTHLY',
     status VARCHAR(20) DEFAULT 'ACTIVE',
+    next_execution_date TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -118,6 +119,7 @@ CREATE TABLE bacs_returns (
 CREATE TABLE bacs_journal_entries (
     id SERIAL PRIMARY KEY,
     submission_id UUID REFERENCES bacs_submissions(id) ON DELETE RESTRICT,
+    transaction_id INT REFERENCES bacs_transactions(id) ON DELETE RESTRICT,
     account_bic VARCHAR(11) REFERENCES participant_profiles(bic_code) ON DELETE RESTRICT,
     amount DECIMAL(20, 2) NOT NULL,
     entry_date TIMESTAMP WITH TIME ZONE DEFAULT NOW()

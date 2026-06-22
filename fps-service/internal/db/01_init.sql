@@ -42,6 +42,7 @@ CREATE TABLE fps_transactions (
     amount DECIMAL(20, 2) NOT NULL,
     status payment_status DEFAULT 'PENDING',
     payment_type VARCHAR(20) DEFAULT 'SIP',
+    cycle_id INTEGER REFERENCES fps_dns_cycles(id),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -92,6 +93,7 @@ CREATE TABLE fps_journal_entries (
     transaction_id UUID REFERENCES fps_transactions(id) ON DELETE RESTRICT,
     account_bic VARCHAR(11) REFERENCES participant_profiles(bic_code) ON DELETE RESTRICT,
     amount DECIMAL(20, 2) NOT NULL,
+    description TEXT,
     entry_date TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
