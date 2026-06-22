@@ -83,6 +83,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	// Limits & Controls
 	mux.HandleFunc("GET /v1/payments/bacs/limits", s.handleGetLimits)
 	mux.HandleFunc("PATCH /v1/payments/bacs/limits", s.authMiddleware(s.handlePatchLimits))
+	mux.HandleFunc("PATCH /v1/payments/bacs/limits/{bic}", s.handlePatchLimits)
 
 	// System Metadata
 	mux.HandleFunc("GET /v1/system/schedule", s.handleSystemSchedule)
@@ -982,7 +983,10 @@ func (s *Server) handleGetLimits(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePatchLimits(w http.ResponseWriter, r *http.Request) {
-	bic := auth.BICFromContext(r.Context())
+	bic := strings.ToUpper(r.PathValue("bic"))
+	if bic == "" {
+		bic = auth.BICFromContext(r.Context())
+	}
 	if !validateBIC(bic) {
 		badRequest(w, "Invalid BIC format")
 		return

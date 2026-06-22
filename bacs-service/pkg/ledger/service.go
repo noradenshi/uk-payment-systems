@@ -571,6 +571,10 @@ func (s *LedgerService) GetSubmission(ctx context.Context, id string) (map[strin
 	if err != nil {
 		return nil, err
 	}
+	transactions, err := s.GetTransactions(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 	return map[string]interface{}{
 		"id":           id,
 		"filename":     filename,
@@ -581,6 +585,7 @@ func (s *LedgerService) GetSubmission(ctx context.Context, id string) (map[strin
 		"cycle_id":     cycleID,
 		"error_count":  errorCount,
 		"created_at":   createdAt.Format(time.RFC3339),
+		"transactions": transactions,
 	}, nil
 }
 
@@ -592,8 +597,8 @@ func (s *LedgerService) ListSubmissions(ctx context.Context, statusFilter, suBic
 				SELECT DISTINCT
 					CASE
 						WHEN dest_bic IS NOT NULL AND dest_bic <> '' AND dest_bic <> s.su_bic
-							THEN dest_bic || ' (' || dest_sort_code || ')'
-						ELSE dest_sort_code
+							THEN dest_bic || ' (' || dest_sort_code || '/' || dest_account || ')'
+						ELSE dest_sort_code || '/' || dest_account
 					END AS destination
 				FROM (
 					SELECT
@@ -601,11 +606,12 @@ func (s *LedgerService) ListSubmissions(ctx context.Context, statusFilter, suBic
 							WHEN t.record_type = 'DIRECT_DEBIT' THEN t.debtor_bic
 							ELSE t.creditor_bic
 						END AS dest_bic,
-						t.dest_sort_code
+						t.dest_sort_code,
+						t.dest_account
 					FROM bacs_transactions t
 					WHERE t.submission_id = s.id
 				) tx
-				WHERE dest_sort_code IS NOT NULL AND dest_sort_code <> ''
+				WHERE dest_sort_code IS NOT NULL AND dest_sort_code <> '' AND dest_account IS NOT NULL AND dest_account <> ''
 			) destinations
 		) AS destinations
 		FROM bacs_submissions s WHERE 1=1`

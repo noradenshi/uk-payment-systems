@@ -22,6 +22,14 @@ func NewLedgerService(pool *pgxpool.Pool) *LedgerService {
 	return &LedgerService{Pool: pool}
 }
 
+func (s *LedgerService) EnsureSchema(ctx context.Context) error {
+	if _, err := s.Pool.Exec(ctx, `ALTER TABLE fps_transactions ADD COLUMN IF NOT EXISTS sender_account VARCHAR(34)`); err != nil {
+		return err
+	}
+	_, err := s.Pool.Exec(ctx, `ALTER TABLE fps_transactions ADD COLUMN IF NOT EXISTS receiver_account VARCHAR(34)`)
+	return err
+}
+
 const fpsSinglePaymentLimit = 1000000.00
 const fpsDailyParticipantLimit = 10000000.00
 
@@ -233,11 +241,11 @@ func (s *LedgerService) settleSIPOnce(ctx context.Context, msgID, sender, receiv
 		}
 
 		err := tx.QueryRow(ctx, `
-			INSERT INTO fps_transactions (msg_id, sender_bic, receiver_bic, sender_sort_code, receiver_sort_code, amount, status, end_to_end_id, payment_type, cycle_id)
-			VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6, 'PENDING', $7, 'SIP', $8)
+			INSERT INTO fps_transactions (msg_id, sender_bic, receiver_bic, sender_sort_code, receiver_sort_code, sender_account, receiver_account, amount, status, end_to_end_id, payment_type, cycle_id)
+			VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), NULLIF($6, ''), NULLIF($7, ''), $8, 'PENDING', $9, 'SIP', $10)
 			ON CONFLICT (msg_id) DO UPDATE SET msg_id = EXCLUDED.msg_id
 			RETURNING id, status, sender_bic, receiver_bic, amount`,
-			msgID, sender, receiver, senderSortCode, receiverSortCode, amount, endToEndID, currentCycleID).Scan(&internalUUID, &currentStatus, &existingSender, &existingReceiver, &existingAmount)
+			msgID, sender, receiver, senderSortCode, receiverSortCode, senderAccount, receiverAccount, amount, endToEndID, currentCycleID).Scan(&internalUUID, &currentStatus, &existingSender, &existingReceiver, &existingAmount)
 		if err != nil {
 			return fmt.Errorf("failed to init: %w", err)
 		}
@@ -755,7 +763,7 @@ func (s *LedgerService) ListPayments(ctx context.Context, statusFilter string, l
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	q := "SELECT msg_id, sender_bic, receiver_bic, COALESCE(sender_sort_code, ''), COALESCE(receiver_sort_code, ''), amount, status::text, created_at, payment_type FROM fps_transactions"
+	q := "SELECT msg_id, sender_bic, receiver_bic, COALESCE(sender_sort_code, ''), COALESCE(receiver_sort_code, ''), COALESCE(sender_account, ''), COALESCE(receiver_account, ''), amount, status::text, created_at, payment_type FROM fps_transactions"
 	var args []interface{}
 	if statusFilter != "" {
 		q += " WHERE status = $1"
@@ -772,13 +780,13 @@ func (s *LedgerService) ListPayments(ctx context.Context, statusFilter string, l
 	defer rows.Close()
 	var result []map[string]interface{}
 	for rows.Next() {
-		var msgID, sender, receiver, senderSC, receiverSC, status, pType string
+		var msgID, sender, receiver, senderSC, receiverSC, senderAccount, receiverAccount, status, pType string
 		var amount float64
 		var createdAt time.Time
-		if err := rows.Scan(&msgID, &sender, &receiver, &senderSC, &receiverSC, &amount, &status, &createdAt, &pType); err != nil {
+		if err := rows.Scan(&msgID, &sender, &receiver, &senderSC, &receiverSC, &senderAccount, &receiverAccount, &amount, &status, &createdAt, &pType); err != nil {
 			return nil, err
 		}
-		result = append(result, map[string]interface{}{"msg_id": msgID, "sender_bic": sender, "receiver_bic": receiver, "sender_sort_code": senderSC, "receiver_sort_code": receiverSC, "amount": amount, "status": status, "created_at": createdAt, "payment_type": pType})
+		result = append(result, map[string]interface{}{"msg_id": msgID, "sender_bic": sender, "receiver_bic": receiver, "sender_sort_code": senderSC, "receiver_sort_code": receiverSC, "sender_account": senderAccount, "receiver_account": receiverAccount, "amount": amount, "status": status, "created_at": createdAt, "payment_type": pType})
 	}
 	return result, nil
 }
@@ -787,8 +795,8 @@ func (s *LedgerService) GetPaymentDetails(ctx context.Context, msgID string) (ma
 	var id, sender, receiver, status, endToEndID, pType string
 	var amount float64
 	var createdAt time.Time
-	var senderSortCode, receiverSortCode *string
-	err := s.Pool.QueryRow(ctx, "SELECT id::text, sender_bic, receiver_bic, sender_sort_code, receiver_sort_code, amount, status::text, COALESCE(end_to_end_id,''), payment_type, created_at FROM fps_transactions WHERE msg_id=$1", msgID).Scan(&id, &sender, &receiver, &senderSortCode, &receiverSortCode, &amount, &status, &endToEndID, &pType, &createdAt)
+	var senderSortCode, receiverSortCode, senderAccount, receiverAccount *string
+	err := s.Pool.QueryRow(ctx, "SELECT id::text, sender_bic, receiver_bic, sender_sort_code, receiver_sort_code, sender_account, receiver_account, amount, status::text, COALESCE(end_to_end_id,''), payment_type, created_at FROM fps_transactions WHERE msg_id=$1", msgID).Scan(&id, &sender, &receiver, &senderSortCode, &receiverSortCode, &senderAccount, &receiverAccount, &amount, &status, &endToEndID, &pType, &createdAt)
 	if err != nil {
 		return nil, err
 	}
@@ -816,6 +824,12 @@ func (s *LedgerService) GetPaymentDetails(ctx context.Context, msgID string) (ma
 	}
 	if receiverSortCode != nil {
 		result["receiver_sort_code"] = *receiverSortCode
+	}
+	if senderAccount != nil {
+		result["sender_account"] = *senderAccount
+	}
+	if receiverAccount != nil {
+		result["receiver_account"] = *receiverAccount
 	}
 	return result, nil
 }

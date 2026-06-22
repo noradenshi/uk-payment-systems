@@ -48,6 +48,8 @@ CREATE TABLE fps_transactions (
     receiver_bic VARCHAR(11) REFERENCES participant_profiles(bic_code) ON DELETE RESTRICT,
     sender_sort_code VARCHAR(9),
     receiver_sort_code VARCHAR(9),
+    sender_account VARCHAR(34),
+    receiver_account VARCHAR(34),
     amount DECIMAL(20, 2) NOT NULL,
     status payment_status DEFAULT 'PENDING',
     payment_type VARCHAR(20) DEFAULT 'SIP',

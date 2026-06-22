@@ -273,8 +273,10 @@ function paymentReceiver(item) {
     return `${item.total_volume} pozycji`;
   }
   const sortCode = item.receiver_sort_code || item.dest_sort_code || "";
+  const account = item.receiver_account || item.dest_account || "";
   const bic = item.receiver_bic || item.creditor_bic || "";
-  return sortCode ? `${bic} (${sortCode})` : bic;
+  const accountDetails = [sortCode, account].filter(Boolean).join("/");
+  return accountDetails ? `${bic} (${accountDetails})` : bic;
 }
 
 function paymentAmount(item) {

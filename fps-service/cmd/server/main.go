@@ -43,6 +43,11 @@ func main() {
 	}
 	log.Println("Database connected")
 
+	ledgerSvc := ledger.NewLedgerService(pool)
+	if err := ledgerSvc.EnsureSchema(ctx); err != nil {
+		log.Fatalf("Schema check failed: %v", err)
+	}
+
 	reg := validator.NewValidatorRegistry()
 	registerXSD(reg, "pacs.008.001.14")
 	registerXSD(reg, "pacs.002.001.16")
@@ -52,7 +57,7 @@ func main() {
 
 	srv := &server.Server{
 		Validator: reg,
-		Ledger:    ledger.NewLedgerService(pool),
+		Ledger:    ledgerSvc,
 		Events:    events.NewEventBus(),
 	}
 
