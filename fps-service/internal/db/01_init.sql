@@ -17,6 +17,7 @@ CREATE TABLE participant_profiles (
 CREATE TABLE participant_liquidity (
     bic_code VARCHAR(11) PRIMARY KEY REFERENCES participant_profiles(bic_code) ON DELETE RESTRICT,
     balance DECIMAL(20, 2) NOT NULL DEFAULT 0.00,
+    earmarked DECIMAL(20, 2) NOT NULL DEFAULT 0.00,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 

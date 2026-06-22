@@ -9,6 +9,7 @@ const contentTypes = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
+  ".yaml": "text/yaml; charset=utf-8",
 };
 
 const server = http.createServer((request, response) => {

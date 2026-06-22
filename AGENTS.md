@@ -124,14 +124,583 @@ A trigger on `journal_entries` fires `pg_notify('liquidity_event', account_bic)`
 2. Register in `main.go`: `registerXSD(reg, "filename_without_ext")`
 3. Refer to existing `chaps_wrapper.xsd` for envelope pattern
 
-### API style
-- Paths: `/v1/{resource}/{scheme}[/{id}[/action]]`
-- JSON for GUI/admin, XML for ISO 20022 external messages
-- Authentication via `Authorization: Bearer <api_key>` header. All authenticated endpoints require it. The BIC is derived from the API key — paths no longer carry `{bic}` parameters.
-- SSE: `GET /v1/payments/{scheme}/incoming` for real-time payment events (BIC from auth header)
-- Error responses: `{"error": "message"}`
-- HTTP status codes: 200 (success), 201 (created), 202 (accepted), 400 (bad request), 404 (not found), 409 (conflict), 500 (internal error), 503 (unavailable)
-- Health: `GET /v1/healthz` returns `{"status":"ok"}` (unauthenticated)
+## API Reference
+
+### Conventions
+
+| Aspect | Convention |
+|---|---|
+| Base path | `/v1/{resource}/{scheme}[/{id}[/{action}]]` |
+| Auth | `Authorization: Bearer <api_key>` (BIC derived from API key via DB lookup) |
+| Unauthenticated | `GET /v1/healthz`, `GET /v1/system/schedule`, `POST /v1/participants/register`, participant list/get/block* by BIC, payment list/get/validate |
+| Content-Type | `application/json` (GUI), `application/xml` (ISO 20022 pacs.008 returns pacs.002), `application/octet-stream` (ISO 8583 binary for FPS) |
+| Idempotency | `Idempotency-Key` header accepted as alternative to body `msg_id` |
+| SSE | `GET /v1/payments/{scheme}/incoming` — real-time events, BIC from auth header |
+| Errors | `{"error": "message"}` |
+| Status codes | 200 (success), 201 (created), 202 (accepted/queued), 400 (bad request), 401 (unauthorized), 404 (not found), 409 (conflict), 415 (unsupported media), 500 (internal), 503 (unavailable — operating hours) |
+
+### Common Error Responses
+
+| Code | Body |
+|---|---|
+| 400 | `{"error": "msg_id, receiver_bic, and positive amount are required"}` |
+| 401 | `{"error": "invalid API key"}` |
+| 404 | `{"error": "Payment not found"}` |
+| 409 | `{"error": "This payment cannot be cancelled"}` |
+| 415 | `{"error": "Unsupported Media Type"}` |
+| 503 | `{"error": "Service is currently unavailable (outside operating hours)"}` |
+
+### Payment Status Values
+
+| Internal Status | ISO 20022 Status | Meaning |
+|---|---|---|
+| `SETTLED` | `ACTC` | Accepted — technically settled |
+| `QUEUED` / `PENDING` | `PDNG` | Pending — queued for later settlement |
+| `REJECTED` | `RJCT` | Rejected — not processed |
+
+### SSE Events
+
+| Scheme | Endpoint | Event Type | Published On |
+|---|---|---|---|
+| CHAPS | `GET /v1/payments/chaps/incoming` | `payment.received` | Each ACTC settlement |
+| FPS | `GET /v1/payments/fps/incoming` | `payment.received` | Each ACTC settlement |
+| BACS | `GET /v1/payments/bacs/incoming` | `cycle.settled` | Cycle `SettleCycle` call |
+
+SSE payload format:
+```
+data: {"type":"payment.received","data":{"msg_id":"CHAPS-...","sender":"BARCGB22","receiver":"MIDLGB22","receiver_sort_code":"40-05-15","receiver_account":"12345678","amount":1500000,"status":"SETTLED","scheme":"CHAPS"}}
+```
+
+---
+
+### Shared Endpoints (All Three Services)
+
+#### POST /v1/participants/register
+
+Register a new participant. Unauthenticated. Returns an API key.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `bic` | string | yes | 8-11 alphanumeric |
+| `name` | string | yes | Bank name |
+| `sort_code` | string | yes | `XX-XX-XX` or `XXXXXX` |
+| `balance` | float | no | Initial balance (default 0) |
+
+FPS-only extra: `participant_type` (DIRECT/INDIRECT), `sponsor_bic`
+BACS-only extra: `su_code`, `is_service_user`, `is_destination_user`
+
+Response `201`: `{"bic": "...", "api_key": "apk_...", "status": "ACTIVE"}`
+
+#### PATCH /v1/participants/{bic}
+
+Update participant details. Unauthenticated.
+
+Body: `{"name": "...", "sort_code": "...", "balance": 1000000}` (+ FPS/BACS-specific fields)
+
+Response `200`: `{"bic": "...", "status": "updated"}`
+
+#### DELETE /v1/participants/{bic}
+
+Delete a participant. Unauthenticated.
+
+Response `200`: `{"bic": "...", "status": "deleted"}`
+Response `409`: if participant has pending transactions
+
+#### GET /v1/participants
+
+List all participants. Unauthenticated.
+
+Response `200`:
+```json
+[{"bic": "BARCGB22", "name": "Barclays Bank", "sort_code": "20-00-00", "status": "ACTIVE",
+  "balance": 50000000, "currency": "GBP", "is_closed": false,
+  "overdraft_limit": 10000000, "block_reason": null}]
+```
+
+#### GET /v1/participants/positions
+
+Get own liquidity position. Authenticated. BIC from API key.
+
+Response `200`: `{"bic": "BARCGB22", "balance": 50000000, "earmarked": 1500000, "available": 48500000}`
+
+#### PATCH /v1/participants/{bic}/status and PATCH /v1/participants/status
+
+Update participant status. The `{bic}` variant is unauthenticated; the `/status` variant uses auth.
+
+Body: `{"status": "SUSPENDED", "reason": "FRAUD_SUSPECTED"}` — status must be ACTIVE, SUSPENDED, or DISABLED.
+
+Response `200`: `{"bic": "...", "status": "SUSPENDED"}`
+
+#### POST /v1/participants/{bic}/block and POST /v1/participants/block
+
+Block a participant (sets SUSPENDED). `{bic}` variant is unauthenticated; `/block` uses auth.
+
+Body: `{"reason": "FRAUD_SUSPECTED"}` (optional, defaults to `FRAUD_SUSPECTED`)
+
+Response `200`: `{"bic": "...", "status": "SUSPENDED", "reason": "FRAUD_SUSPECTED"}`
+
+#### GET /v1/participants/{bic}/block and GET /v1/participants/block
+
+Get block details. `{bic}` variant unauthenticated; `/block` uses auth.
+
+Response `200`: `{"bic": "...", "reason": "FRAUD_SUSPECTED", "blocked_at": "..."}`
+Response `404`: if not blocked
+
+#### DELETE /v1/participants/{bic}/block and DELETE /v1/participants/block
+
+Unblock a participant (sets ACTIVE). `{bic}` variant unauthenticated; `/block` uses auth.
+
+Response `200`: `{"bic": "...", "status": "ACTIVE"}`
+
+#### POST /v1/liquidity/top-up
+
+Add funds to own balance. Authenticated.
+
+Body: `{"amount": 5000000.00}`
+
+Response `200`: `{"bic": "...", "status": "UPDATED"}`
+
+#### GET /v1/healthz
+
+Health check. Unauthenticated.
+
+Response `200`: `{"status": "ok", "service": "CHAPS"}` (service varies per service)
+
+#### GET /v1/system/schedule
+
+Operating hours and demo config. Unauthenticated.
+
+Response `200` (CHAPS): `{"date": "2026-06-22", "opening_time": "07:00", "interbank_cutoff": "18:00", "timezone": "Europe/London", "demo_session_minutes": "0"}`
+Response `200` (FPS): includes `closing_time`, `settlement_times` array
+Response `200` (BACS): includes `input_cutoff`, `settlement: "T+2"`
+
+---
+
+### CHAPS Endpoints (port 8080)
+
+#### POST /v1/payments/chaps
+
+Submit a CHAPS payment. Authenticated. Content-Type dispatch:
+- `application/json` → direct JSON entry (see below)
+- `application/xml` or `text/xml` → ISO 20022 pacs.008 with XSD validation
+
+JSON Mode Body:
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `msg_id` | string | yes | Unique (idempotency), max 35 chars |
+| `end_to_end_id` | string | no | End-to-end reference |
+| `receiver_bic` | string | yes | Target BIC |
+| `receiver_sort_code` | string | yes | `XX-XX-XX` or `XXXXXX` |
+| `receiver_account` | string | yes | Account number |
+| `amount` | float | yes | GBP amount (> 0) |
+
+Sender BIC is derived from auth header (the authenticated participant is always the sender).
+
+XML Mode: BizMsg envelope containing pacs.008, validated against `chaps_wrapper.xsd`. Sender/receiver BICs, sort codes parsed from `FinInstnId/BICFI` and `ClrSysMmbId/MmbId` in `DbtrAgt`/`CdtrAgt`.
+
+Response `200` (JSON): `{"msg_id": "...", "status": "SETTLED", "iso_status": "ACTC", "reason_code": ""}`
+Response `200` (XML): BizMsg envelope containing pacs.002 with ACTC
+Response `202` (JSON): `{"msg_id": "...", "status": "QUEUED", "iso_status": "PDNG", "reason_code": "INSU"}` (insufficient liquidity)
+Response `202` (XML): pacs.002 with PDNG or RJCT
+
+Header `X-Transaction-Status` set on all responses.
+
+#### POST /v1/payments/chaps/validate
+
+Pre-flight validation without settling. Unauthenticated.
+
+Body: `{"sender_bic": "BARCGB22", "receiver_bic": "MIDLGB22", "amount": 1500000}`
+
+Response `200`: `{"valid": true, "checks": ["bic_format", "positive_amount", "limit_check", "participant_exists", "sender_active", "sufficient_liquidity"], "errors": [], "available": 5000000}`
+
+#### GET /v1/payments/chaps
+
+List CHAPS payments. Unauthenticated. Query params: `?status=SETTLED&limit=50`
+
+Response `200`:
+```json
+[{"msg_id": "CHAPS-...", "sender_bic": "BARCGB22", "receiver_bic": "MIDLGB22",
+  "sender_sort_code": "20-00-00", "receiver_sort_code": "40-05-15",
+  "amount": 1500000, "status": "SETTLED", "created_at": "2026-06-22T10:00:00Z"}]
+```
+
+#### GET /v1/payments/chaps/{id}
+
+Get single payment details with audit trail. Unauthenticated.
+
+Response `200`:
+```json
+{"msg_id": "...", "status": "SETTLED", "amount": 1500000, "sender_bic": "BARCGB22",
+ "receiver_bic": "MIDLGB22", "sender_sort_code": "20-00-00", "receiver_sort_code": "40-05-15",
+ "end_to_end_id": "E2E-REF-001", "created_at": "...",
+ "audit_trail": [{"bic": "BARCGB22", "amount": -1500000}, {"bic": "MIDLGB22", "amount": 1500000}]}
+```
+
+#### DELETE /v1/payments/chaps/{id}
+
+Cancel a pending/queued CHAPS payment. Releases earmarked funds.
+
+Response `200`: `{"msg_id": "...", "status": "CANCELLED"}`
+Response `409`: if payment is already SETTLED
+
+#### POST /v1/payments/chaps/{id}/authorize
+
+Authorize a pending/queued payment for settlement. Unauthenticated.
+
+Response `200`: `{"msg_id": "...", "status": "SETTLED"}`
+
+#### POST /v1/payments/chaps/{id}/amend
+
+Amend a pending payment's end-to-end ID. Unauthenticated.
+
+Body: `{"end_to_end_id": "NEW-REF-001"}`
+
+Response `200`: `{"msg_id": "...", "status": "AMENDED"}`
+
+#### GET /v1/payments/chaps/limits
+
+Get CHAPS clearing limits. Unauthenticated. Query: `?bic=BARCGB22`
+
+Response `200`:
+```json
+{"currency": "GBP", "single_payment_limit": 20000000, "daily_participant_limit": 10000000,
+ "total_available_liquidity": 500000000, "remaining_intraday_liquidity": 150000000}
+```
+
+#### PATCH /v1/payments/chaps/limits
+
+Update own overdraft limit. Authenticated.
+
+Body: `{"overdraft_limit": 1000000.00}`
+
+Response `200`: `{"bic": "...", "overdraft_limit": 1000000}`
+
+#### POST /v1/payments/chaps/gridlock/resolve
+
+Resolve payment gridlock — settles queued payments that deadlock on liquidity. Unauthenticated.
+
+Response `200`: `{"status": "COMPLETED", "settled": 3}`
+
+---
+
+### FPS Endpoints (port 8081)
+
+#### POST /v1/payments/fps
+
+Submit an FPS payment. Authenticated. Three content-type modes:
+- `application/json` → SIP settlement (same body shape as CHAPS JSON)
+- `application/xml` → ISO 20022 pacs.008 with XSD validation
+- `application/octet-stream` → ISO 8583 binary 0200 message
+
+JSON Body: same as CHAPS: `{"msg_id", "end_to_end_id", "receiver_bic", "receiver_sort_code", "receiver_account", "amount"}`
+
+ISO 8583 Binary (0200):
+| Field | DE | Format | Notes |
+|---|---|---|---|
+| MTI | — | 4 ASCII chars | Always `0200` |
+| DE2 PAN | 2 | LLVAR ASCII | Primary account number |
+| DE3 ProcCode | 3 | 6 ASCII | Processing code |
+| DE4 Amount | 4 | 12 ASCII | In **pence** (e.g. `0000002500000` = £250,000.00) |
+| DE7 TransDateTime | 7 | 10 ASCII | MMDDHHMMSS |
+| DE11 Trace | 11 | 6 ASCII | Trace number |
+| DE32 Acquirer | 32 | LLVAR ASCII | Sender BIC |
+| DE37 RefNum | 37 | 12 ASCII | Reference number |
+| DE41 TerminalID | 41 | 8 ASCII | Terminal ID |
+| DE49 Currency | 49 | 3 ASCII | `826` for GBP |
+| DE100 Receiver | 100 | LLVAR ASCII | Receiver BIC |
+| DE102 Source Account | 102 | LLVAR ASCII | Source account |
+| DE103 Dest Account | 103 | LLVAR ASCII | Destination account |
+
+Response `200` (JSON): `{"msg_id": "...", "status": "SETTLED", "iso_status": "ACTC", "reason_code": ""}`
+Response `200` (ISO 8583): Binary 0210 message with DE39=`00` (approved)
+Response `202` (ISO 8583): Binary 0210 with DE39=`51` (PDNG) or `57` (RJCT)
+
+#### GET /v1/payments/fps
+
+List FPS payments. Unauthenticated. Query: `?status=SETTLED&limit=50`
+
+Response includes `payment_type` field (SIP, DNS, FORWARD_DATED, STANDING_ORDER).
+
+#### POST /v1/payments/fps/validate
+
+Pre-flight validation. Unauthenticated.
+
+Body: `{"sender_bic": "BARCGB22", "receiver_bic": "MIDLGB22", "amount": 250000}`
+
+Response `200`: `{"valid": true, "sender_bic": "...", "receiver_bic": "...", "amount": 250000, "reason": "", "checks_passed": [...]}`
+
+#### GET /v1/payments/fps/{id}
+
+Get FPS payment details. Unauthenticated.
+
+Response `200`: includes same fields as CHAPS payment details.
+
+#### DELETE /v1/payments/fps/{id}
+
+Cancel/recall an FPS payment. Only SIP payments can be cancelled.
+
+Response `200`: `{"msg_id": "...", "status": "CANCELLED"}`
+
+#### POST /v1/payments/fps/forward-dated
+
+Schedule a forward-dated payment. Authenticated.
+
+Body: `{"msg_id": "...", "receiver_bic": "MIDLGB22", "amount": 250000, "execution_date": "2026-06-25"}`
+
+Response `201`: `{"msg_id": "...", "status": "SCHEDULED"}`
+
+#### GET /v1/payments/fps/forward-dated
+
+List forward-dated payments. Unauthenticated.
+
+#### DELETE /v1/payments/fps/forward-dated/{id}
+
+Cancel a forward-dated payment. Unauthenticated.
+
+#### POST /v1/payments/fps/standing-orders
+
+Create a standing order. Authenticated.
+
+Body: `{"reference": "SO-001", "receiver_bic": "MIDLGB22", "amount": 5000, "frequency": "MONTHLY", "next_date": "2026-07-01", "end_date": "2027-07-01"}`
+
+Frequency values: DAILY, WEEKLY, MONTHLY, YEARLY
+
+Response `201`: `{"reference": "...", "status": "ACTIVE"}`
+
+#### GET /v1/payments/fps/standing-orders
+
+List standing orders. Unauthenticated.
+
+#### GET /v1/payments/fps/standing-orders/{id}
+
+Get single standing order details. Unauthenticated.
+
+#### PATCH /v1/payments/fps/standing-orders/{id}
+
+Update a standing order. Unauthenticated.
+
+Body: `{"frequency": "WEEKLY", "amount": 10000, "next_date": "2026-08-01", "end_date": "2027-08-01"}`
+
+Response `200`: `{"id": "...", "status": "UPDATED"}`
+
+#### DELETE /v1/payments/fps/standing-orders/{id}
+
+Cancel a standing order. Unauthenticated.
+
+Response `200`: `{"id": "...", "status": "CANCELLED"}`
+
+#### POST /v1/payments/fps/bulk
+
+Create a bulk submission. Authenticated.
+
+Body: `{"filename": "bulk_001.csv", "total_items": 100, "total_value": 500000}`
+
+Response `201`: `{"id": "...", "status": "RECEIVED"}`
+
+#### GET /v1/payments/fps/bulk/{id}
+
+Get bulk submission details. Unauthenticated.
+
+#### POST /v1/payments/fps/iso8583
+
+Submit ISO 8583 binary 0200 message over HTTP. Authenticated. Same field structure as the ISO 8583 handler in `POST /v1/payments/fps` with `Content-Type: application/octet-stream`.
+
+Response `200`: Binary 0210 with DE39=`00`
+Response `202`: Binary 0210 with DE39=`51` or `57`
+
+#### GET /v1/payments/fps/iso8583/decode
+
+Decode an ISO 8583 binary message without settling. Unauthenticated. Sends binary body, receives JSON with parsed fields.
+
+#### GET /v1/payments/fps/limits
+
+Get FPS limits. Unauthenticated. Query: `?bic=BARCGB22`
+
+Response same shape as CHAPS limits.
+
+#### PATCH /v1/payments/fps/limits
+
+Update own overdraft limit. Authenticated.
+
+Body: `{"overdraft_limit": 2000000}`
+
+#### POST /v1/payments/fps/gridlock/resolve
+
+Resolve FPS gridlock (queued SIP payments). Unauthenticated.
+
+#### FPS DNS Settlement
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/v1/settlement/dns/cycle` | GET | Get current DNS cycle |
+| `/v1/settlement/dns/close` | POST | Close DNS cycle — nets QUEUED transactions, settles net positions. Response: `{"status": "CLOSED", "net_positions": [{"bic": "...", "net_position": ...}]}` |
+| `/v1/settlement/dns/history` | GET | DNS cycle history |
+
+#### GET /v1/liquidity/prefunded
+
+Get own prefunded balance. Authenticated.
+
+Response `200`: `{"bic": "...", "prefunded_balance": 10000000}`
+
+---
+
+### BACS Endpoints (port 8082)
+
+#### POST /v1/payments/bacs/submit
+
+Submit a BACS Standard 18 file. Authenticated. Accepts:
+- `multipart/form-data` with file field `"file"`
+- Raw body with `Content-Type: text/plain` (use `?filename=` query param)
+
+Record types parsed:
+| Record | Type | Content |
+|---|---|---|
+| 1 | Header | Volume no, destination sort code/account, total value (pence ÷ 100), total volume, date |
+| 2 | Volume header | Originator/ destination, processing date, value, SU code, reference |
+| 3 | Direct Debit | Destination sort code/account, amount (pence ÷ 100), originator, reference |
+| 4 | Direct Credit | Destination sort code/account, amount (pence ÷ 100), originator name, reference |
+| 5 | Trailer (DD) | Volume no, record count |
+| 9 | Trailer (DC) | Volume no, total value (pence ÷ 100), total volume, hash total |
+| A | AUDDIS | Instruction code, sort code, account, reference, amount (pence ÷ 100) |
+
+Response `201`:
+```json
+{"id": 1, "filename": "payments.txt", "volume": 100, "value": 500000.00,
+ "status": "RECEIVED", "cycle_id": 1, "su_bic": "BARCGB22"}
+```
+
+Response `202` on partial store: `{"id": 1, "status": "RECEIVED", "error": "transactions may be partially stored"}`
+Response `503` if outside input cutoff or no open cycle.
+
+#### GET /v1/payments/bacs/submit/{id}
+
+Get submission details. Unauthenticated.
+
+#### GET /v1/payments/bacs/submit
+
+List submissions. Unauthenticated. Query: `?status=RECEIVED&su_bic=BARCGB22`
+
+#### DELETE /v1/payments/bacs/submit/{id}
+
+Recall a submission (only if cycle is still OPEN). Unauthenticated.
+
+Response `200`: `{"id": ..., "status": "RECALLED"}`
+
+#### BACS Cycle Management
+
+| Endpoint | Method | Description | Transition |
+|---|---|---|---|
+| `/v1/payments/bacs/cycle/current` | GET | Get current cycle | — |
+| `/v1/payments/bacs/cycle/{cycleDate}` | GET | Get cycle by date (YYYY-MM-DD) | — |
+| `/v1/payments/bacs/cycle` | GET | List all cycles | — |
+| `/v1/payments/bacs/cycle/close` | POST | Close input day | OPEN → PROCESSING |
+| `/v1/payments/bacs/cycle/process` | POST | Process cycle | PROCESSING → AWAITING_SETTLEMENT |
+| `/v1/payments/bacs/cycle/settle` | POST | Settle cycle | AWAITING_SETTLEMENT → SETTLED |
+
+Cycle state machine: `OPEN → PROCESSING → AWAITING_SETTLEMENT → SETTLED`
+
+#### POST /v1/payments/bacs/mandates
+
+Create a BACS Direct Debit mandate (AUDDIS). Unauthenticated.
+
+Body: `{"reference": "MAND-001", "su_bic": "BARCGB22", "payer_name": "John Smith", "payer_sort_code": "40-05-15", "payer_account": "12345678", "amount": 500.00, "frequency": "MONTHLY"}`
+
+Response `201`: `{"id": 1, "reference": "MAND-001", "status": "ACTIVE"}`
+
+#### GET /v1/payments/bacs/mandates
+
+List mandates. Unauthenticated. Query: `?su_bic=BARCGB22`
+
+#### GET /v1/payments/bacs/mandates/{ref}
+
+Get mandate details. Unauthenticated.
+
+#### PATCH /v1/payments/bacs/mandates/{ref}
+
+Amend mandate. Unauthenticated.
+
+Body: `{"amount": 750.00, "frequency": "WEEKLY"}`
+
+Response `200`: `{"reference": "MAND-001", "status": "AMENDED"}`
+
+#### DELETE /v1/payments/bacs/mandates/{ref}
+
+Cancel mandate. Unauthenticated.
+
+Response `200`: `{"reference": "MAND-001", "status": "CANCELLED"}`
+
+#### POST /v1/payments/bacs/mandates/{ref}/claim
+
+Claim a mandate — link payer account. Unauthenticated.
+
+Body: `{"payer_sort_code": "40-05-15", "payer_account": "12345678"}`
+
+Response `200`: `{"reference": "MAND-001", "status": "CLAIMED"}`
+
+#### BACS Returns & Rejects
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/v1/payments/bacs/returns` | GET | List ARUCS returns |
+| `/v1/payments/bacs/returns` | POST | Create return. Body: `{"original_transaction_id": 1, "reason_code": "AC-01", "amount": 500}` |
+| `/v1/payments/bacs/rejects` | GET | List rejected submissions |
+
+#### BACS Reports
+
+| Endpoint | Method | Auth | Description |
+|---|---|---|---|
+| `/v1/payments/bacs/reports/{cycleDate}` | GET | No | Cycle reports — list submissions with volume/value |
+| `/v1/payments/bacs/reports/{cycleDate}/su` | GET | Yes | SU-specific cycle reports (BIC from auth) |
+| `/v1/payments/bacs/reports/{cycleDate}/summary` | GET | No | Cycle summary: total submissions, volume, value |
+| `/v1/payments/bacs/reports/{cycleDate}/netting` | GET | No | Netting report (query: `?bic=`). Returns bilateral net positions |
+| `/v1/payments/bacs/su/reports` | GET | Yes | SU reports (BIC from auth) |
+
+`GET .../netting` response:
+```json
+{"cycle_id": 1, "cycle_date": "2026-06-22", "cycle_status": "SETTLED",
+ "bilateral": [{"debtor_bic": "...", "creditor_bic": "...", "gross_amount": ..., "net_amount": ...}],
+ "net_positions": [{"bic": "...", "net_position": ..., "balance_before": ..., "overdraft_limit": ..., "status": "..."}]}
+```
+
+#### GET /v1/payments/bacs/limits
+
+Get BACS system limits. Unauthenticated.
+
+Response `200`:
+```json
+{"max_file_size": 1000000, "max_transactions_per_file": 100000, "max_submission_value": 50000000.00,
+ "total_system_liquidity": ..., "settlement_cycle": "T+2", "currency": "GBP"}
+```
+
+#### PATCH /v1/payments/bacs/limits
+
+Update own overdraft limit. Authenticated.
+
+Body: `{"overdraft_limit": 5000000}`
+
+Response `200`: `{"bic": "...", "status": "LIMITS_UPDATED", "overdraft_limit": 5000000}`
+
+---
+
+### KLIK Endpoints (CHAPS integration, port 8080)
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/v1/klik/chaps/settle` | POST | Settle via bank name → BIC resolution. Body: `{"session_id", "transfer_id", "from": "Barclays Bank", "to": "HSBC", "amount": "250.00", "currency": "GBP"}`. Response: `{"transfer_id": "...", "status": "SUCCESS", "rtgs_reference": "CHAPS-TXN-001"}` |
+| `/v1/klik/chaps/healthz` | GET | Returns `{"status": "ok", "system": "CHAPS"}` |
+
+---
+
+### ISO 8583 TCP Socket (FPS only)
+
+- Port: `7421` (configurable via `ISO8583_PORT` env var)
+- Framing: 2-byte big-endian length prefix, then raw ISO 8583 binary
+- Max message size: 4096 bytes
+- Goroutine-per-connection model
+- Handles 0200 → responds with 0210 (same field structure as HTTP ISO 8583 handler)
+- Uses same `Ledger.SettleSIP` and gridlock retry as HTTP
+
+---
 
 ### Database conventions
 - Use `DECIMAL(20, 2)` for monetary amounts
