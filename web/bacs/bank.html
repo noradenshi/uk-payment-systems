@@ -28,6 +28,7 @@
     <section class="metrics-grid">
       <article class="metric-card"><span>Saldo</span><strong id="metricBalance">-</strong></article>
       <article class="metric-card"><span>Dostępne środki</span><strong id="metricAvailable">-</strong></article>
+      <article class="metric-card"><span>Zablokowane środki</span><strong id="metricEarmarked">-</strong></article>
       <article class="metric-card"><span>Limit</span><strong id="metricLimit">-</strong></article>
       <article class="metric-card"><span>Zgłoszenia banku</span><strong id="metricBankPayments">-</strong></article>
     </section>
@@ -66,7 +67,7 @@
     </section>
     <section class="work-grid">
       <article class="panel"><h2>Szczegóły banku</h2><div id="bankDetails" class="detail-sections">-</div></article>
-      <article class="panel"><h2>Zgłoszenia BACS</h2><div class="table-wrap"><table><thead><tr><th>ID</th><th>SU</th><th>Pozycje</th><th>Kwota</th><th>Status</th></tr></thead><tbody id="paymentsBody"></tbody></table></div></article>
+      <article class="panel"><h2>Zgłoszenia BACS</h2><div class="table-wrap"><table><thead><tr><th>ID</th><th>SU</th><th>Odbiorca</th><th>Kwota</th><th>Status</th></tr></thead><tbody id="paymentsBody"></tbody></table></div></article>
     </section>
   </main>
   <script>window.UKPS_PAGE = { scheme: "bacs", role: "bank" };</script>

@@ -266,6 +266,9 @@ function paymentSender(item) {
 }
 
 function paymentReceiver(item) {
+  if (scheme.key === "bacs" && item.destinations) {
+    return item.destinations;
+  }
   if (scheme.key === "bacs" && item.total_volume != null) {
     return `${item.total_volume} pozycji`;
   }
@@ -545,9 +548,11 @@ async function refreshBank() {
     const limits = await api(`${scheme.limitsPath}?bic=${encodeURIComponent(bic)}`).catch(() => null);
     const balance = Number(participant?.balance || 0);
     const overdraft = Number(participant?.overdraft_limit || 0);
+    const earmarked = Number(position?.earmarked || 0);
     setText("loggedBank", `${bic}${participant?.name ? ` - ${participant.name}` : ""}`);
     setText("metricBalance", money.format(balance));
     setText("metricAvailable", position?.available != null ? money.format(Number(position.available)) : money.format(balance + overdraft));
+    setText("metricEarmarked", money.format(earmarked));
     setText("metricLimit", limits?.single_payment_limit != null ? money.format(Number(limits.single_payment_limit)) : money.format(overdraft));
     setText("metricBankPayments", String(bankPayments.length));
     setHTML("bankDetails", renderBankDetails(participant, position, limits));

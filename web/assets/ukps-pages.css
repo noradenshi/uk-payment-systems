@@ -136,7 +136,7 @@ h3 {
 
 .metrics-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px;
   margin-bottom: 14px;
 }
@@ -436,9 +436,22 @@ button:disabled {
 
 .bacs-payment-row {
   display: grid;
-  grid-template-columns: minmax(180px, 1.5fr) minmax(100px, .8fr) minmax(100px, .8fr) minmax(120px, 1fr) auto;
+  grid-template-columns: minmax(0, 1.35fr) minmax(88px, .7fr) minmax(88px, .7fr) minmax(110px, .9fr) max-content;
   gap: 10px;
   align-items: end;
+}
+
+.bacs-payment-row > * {
+  min-width: 0;
+}
+
+.bacs-payment-row select,
+.bacs-payment-row input {
+  min-width: 0;
+}
+
+.bacs-payment-row button {
+  white-space: nowrap;
 }
 
 .control-block {

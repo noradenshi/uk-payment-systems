@@ -585,20 +585,42 @@ func (s *LedgerService) GetSubmission(ctx context.Context, id string) (map[strin
 }
 
 func (s *LedgerService) ListSubmissions(ctx context.Context, statusFilter, suBic string) ([]map[string]interface{}, error) {
-	query := `SELECT id, filename, su_bic, total_volume, total_value, status::text, cycle_id, error_count, created_at
-		FROM bacs_submissions WHERE 1=1`
+	query := `SELECT s.id, s.filename, s.su_bic, s.total_volume, s.total_value, s.status::text, s.cycle_id, s.error_count, s.created_at,
+		(
+			SELECT string_agg(destination, ', ' ORDER BY destination)
+			FROM (
+				SELECT DISTINCT
+					CASE
+						WHEN dest_bic IS NOT NULL AND dest_bic <> '' AND dest_bic <> s.su_bic
+							THEN dest_bic || ' (' || dest_sort_code || ')'
+						ELSE dest_sort_code
+					END AS destination
+				FROM (
+					SELECT
+						CASE
+							WHEN t.record_type = 'DIRECT_DEBIT' THEN t.debtor_bic
+							ELSE t.creditor_bic
+						END AS dest_bic,
+						t.dest_sort_code
+					FROM bacs_transactions t
+					WHERE t.submission_id = s.id
+				) tx
+				WHERE dest_sort_code IS NOT NULL AND dest_sort_code <> ''
+			) destinations
+		) AS destinations
+		FROM bacs_submissions s WHERE 1=1`
 	args := []interface{}{}
 	argIdx := 1
 	if statusFilter != "" {
-		query += " AND status = $" + fmt.Sprintf("%d", argIdx)
+		query += " AND s.status = $" + fmt.Sprintf("%d", argIdx)
 		args = append(args, statusFilter)
 		argIdx++
 	}
 	if suBic != "" {
-		query += " AND su_bic = $" + fmt.Sprintf("%d", argIdx)
+		query += " AND s.su_bic = $" + fmt.Sprintf("%d", argIdx)
 		args = append(args, suBic)
 	}
-	query += " ORDER BY created_at DESC LIMIT 100"
+	query += " ORDER BY s.created_at DESC LIMIT 100"
 	rows, err := s.Pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -612,10 +634,11 @@ func (s *LedgerService) ListSubmissions(ctx context.Context, statusFilter, suBic
 		var totalValue float64
 		var cycleID, errorCount int
 		var createdAt time.Time
-		if err := rows.Scan(&id, &filename, &suBic2, &totalVolume, &totalValue, &status, &cycleID, &errorCount, &createdAt); err != nil {
+		var destinations *string
+		if err := rows.Scan(&id, &filename, &suBic2, &totalVolume, &totalValue, &status, &cycleID, &errorCount, &createdAt, &destinations); err != nil {
 			return nil, err
 		}
-		result = append(result, map[string]interface{}{
+		item := map[string]interface{}{
 			"id":           id,
 			"filename":     filename,
 			"su_bic":       suBic2,
@@ -625,7 +648,11 @@ func (s *LedgerService) ListSubmissions(ctx context.Context, statusFilter, suBic
 			"cycle_id":     cycleID,
 			"error_count":  errorCount,
 			"created_at":   createdAt.Format(time.RFC3339),
-		})
+		}
+		if destinations != nil {
+			item["destinations"] = *destinations
+		}
+		result = append(result, item)
 	}
 	return result, rows.Err()
 }
