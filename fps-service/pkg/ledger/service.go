@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"fps-service/pkg/auth"
+	"fps-service/pkg/events"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -15,11 +16,12 @@ import (
 )
 
 type LedgerService struct {
-	Pool *pgxpool.Pool
+	Pool   *pgxpool.Pool
+	Events *events.EventBus
 }
 
-func NewLedgerService(pool *pgxpool.Pool) *LedgerService {
-	return &LedgerService{Pool: pool}
+func NewLedgerService(pool *pgxpool.Pool, ev *events.EventBus) *LedgerService {
+	return &LedgerService{Pool: pool, Events: ev}
 }
 
 const fpsSinglePaymentLimit = 1000000.00
@@ -170,7 +172,14 @@ func (s *LedgerService) UpdateParticipantStatus(ctx context.Context, bic, status
 }
 
 func (s *LedgerService) BlockParticipant(ctx context.Context, bic, reason string) error {
-	return s.UpdateParticipantStatus(ctx, bic, "SUSPENDED", reason)
+	err := s.UpdateParticipantStatus(ctx, bic, "SUSPENDED", reason)
+	if err == nil && s.Events != nil {
+		s.Events.Publish(bic, events.Event{
+			Type: "participant.blocked",
+			Data: map[string]interface{}{"bic": bic, "reason": reason},
+		})
+	}
+	return err
 }
 
 func (s *LedgerService) GetBlockDetails(ctx context.Context, bic string) (map[string]interface{}, error) {
@@ -189,6 +198,12 @@ func (s *LedgerService) GetBlockDetails(ctx context.Context, bic string) (map[st
 
 func (s *LedgerService) UnblockParticipant(ctx context.Context, bic string) error {
 	_, err := s.Pool.Exec(ctx, "UPDATE participant_statuses SET status = 'ACTIVE', block_reason = NULL, blocked_at = NULL, updated_at = NOW() WHERE bic_code = $1", bic)
+	if err == nil && s.Events != nil {
+		s.Events.Publish(bic, events.Event{
+			Type: "participant.unblocked",
+			Data: map[string]interface{}{"bic": bic},
+		})
+	}
 	return err
 }
 
@@ -210,6 +225,39 @@ func (s *LedgerService) SettleSIP(ctx context.Context, msgID, sender, receiver s
 		s.ResolveGridlock(ctx)
 		s.ResolveBilateralGridlock(ctx)
 		result, err = s.settleSIPOnce(ctx, msgID, sender, receiver, amount, endToEndID, senderSortCode, receiverSortCode, senderAccount, receiverAccount)
+	}
+	if s.Events != nil {
+		if result.Status == "ACTC" {
+			s.Events.Publish(receiver, events.Event{
+				Type: "payment.received",
+				Data: map[string]interface{}{
+					"msg_id":   msgID,
+					"sender":   sender,
+					"receiver": receiver,
+					"amount":   amount,
+					"status":   "SETTLED",
+					"scheme":   "FPS",
+				},
+			})
+		} else if result.Status == "PDNG" {
+			s.Events.Publish(sender, events.Event{
+				Type: "payment.queued",
+				Data: map[string]interface{}{
+					"msg_id":   msgID,
+					"sender":   sender,
+					"receiver": receiver,
+					"amount":   amount,
+					"reason":   "INSU",
+				},
+			})
+			s.Events.Publish(sender, events.Event{
+				Type: "limit.breach",
+				Data: map[string]interface{}{
+					"bic":    sender,
+					"reason": "INSU",
+				},
+			})
+		}
 	}
 	return result, err
 }
@@ -518,11 +566,17 @@ func (s *LedgerService) TopUpLiquidity(ctx context.Context, bic string, amount f
 	if err != nil {
 		return err
 	}
-	_, _ = s.Pool.Exec(ctx, `
+	tag, _ := s.Pool.Exec(ctx, `
 		UPDATE participant_statuses st
 		SET liquidity_breach_at = NULL, updated_at = NOW()
 		FROM participant_liquidity l
 		WHERE l.bic_code = st.bic_code AND st.bic_code = $1 AND l.balance >= -st.overdraft_limit`, bic)
+	if tag.RowsAffected() > 0 && s.Events != nil {
+		s.Events.Publish(bic, events.Event{
+			Type: "limit.breach_cleared",
+			Data: map[string]interface{}{"bic": bic},
+		})
+	}
 	_, _ = s.ResolveGridlock(ctx)
 	_, _ = s.ResolveBilateralGridlock(ctx)
 	return nil
@@ -724,7 +778,7 @@ func (s *LedgerService) ResolveBilateralGridlock(ctx context.Context) (int, erro
 }
 
 func (s *LedgerService) EnforceRealtimeLiquidityBlocks(ctx context.Context) error {
-	_, err := s.Pool.Exec(ctx, `
+	rows, err := s.Pool.Query(ctx, `
 		UPDATE participant_statuses st
 		SET status='SUSPENDED', block_reason='LIQUIDITY_LIMIT_EXCEEDED_2H',
 		    blocked_at=COALESCE(blocked_at, NOW()), updated_at=NOW()
@@ -733,8 +787,58 @@ func (s *LedgerService) EnforceRealtimeLiquidityBlocks(ctx context.Context) erro
 		  AND st.status='ACTIVE'
 		  AND st.liquidity_breach_at IS NOT NULL
 		  AND st.liquidity_breach_at <= NOW() - INTERVAL '2 hours'
-		  AND l.balance < -st.overdraft_limit`)
-	return err
+		  AND l.balance < -st.overdraft_limit
+		RETURNING st.bic_code`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var bic string
+		if err := rows.Scan(&bic); err != nil {
+			continue
+		}
+		if s.Events != nil {
+			s.Events.Publish(bic, events.Event{
+				Type: "participant.blocked",
+				Data: map[string]interface{}{"bic": bic, "reason": "LIQUIDITY_LIMIT_EXCEEDED_2H"},
+			})
+		}
+	}
+	return rows.Err()
+}
+
+func (s *LedgerService) CheckWarningThresholds(ctx context.Context, thresholdPct float64) error {
+	if s.Events == nil {
+		return nil
+	}
+	rows, err := s.Pool.Query(ctx, `
+		SELECT l.bic_code
+		FROM participant_liquidity l
+		JOIN participant_statuses st ON st.bic_code = l.bic_code
+		WHERE st.status = 'ACTIVE'
+		  AND st.overdraft_limit > 0
+		  AND (st.last_warning_at IS NULL OR st.last_warning_at <= NOW() - INTERVAL '1 hour')
+		  AND (l.balance - COALESCE(l.earmarked,0) + st.overdraft_limit) / st.overdraft_limit * 100 < $1`, thresholdPct)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var bic string
+		if err := rows.Scan(&bic); err != nil {
+			continue
+		}
+		s.Events.Publish(bic, events.Event{
+			Type: "limit.warning",
+			Data: map[string]interface{}{
+				"bic":           bic,
+				"threshold_pct": thresholdPct,
+			},
+		})
+		s.Pool.Exec(ctx, `UPDATE participant_statuses SET last_warning_at=NOW() WHERE bic_code=$1`, bic)
+	}
+	return rows.Err()
 }
 
 func (s *LedgerService) UpdateOverdraftLimit(ctx context.Context, bic string, limit float64) error {
@@ -822,9 +926,9 @@ func (s *LedgerService) GetPaymentDetails(ctx context.Context, msgID string) (ma
 
 func (s *LedgerService) RecallPayment(ctx context.Context, msgID string) (bool, error) {
 	released := false
+	var senderBic string
+	var amount float64
 	err := pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
-		var senderBic string
-		var amount float64
 		err := tx.QueryRow(ctx, `
 			UPDATE fps_transactions SET status='REJECTED'
 			WHERE msg_id=$1 AND (status='PENDING' OR status='QUEUED')
@@ -844,6 +948,12 @@ func (s *LedgerService) RecallPayment(ctx context.Context, msgID string) (bool, 
 		released = true
 		return nil
 	})
+	if err == nil && released && s.Events != nil {
+		s.Events.Publish(senderBic, events.Event{
+			Type: "payment.cancelled",
+			Data: map[string]interface{}{"msg_id": msgID, "sender": senderBic, "amount": amount},
+		})
+	}
 	return released, err
 }
 

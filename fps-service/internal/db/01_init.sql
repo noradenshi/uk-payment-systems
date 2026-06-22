@@ -27,6 +27,7 @@ CREATE TABLE participant_statuses (
     is_closed BOOLEAN DEFAULT FALSE,
     overdraft_limit DECIMAL(20, 2) NOT NULL DEFAULT 30000000.00,
     liquidity_breach_at TIMESTAMP WITH TIME ZONE,
+    last_warning_at TIMESTAMP WITH TIME ZONE,
     blocked_at TIMESTAMP WITH TIME ZONE,
     block_reason TEXT,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()

@@ -21,10 +21,15 @@ func (s *Server) StartScheduler(ctx context.Context) {
 		interval = time.Duration(math.Min(demoVal, 60)) * time.Second
 	}
 
+	warningPct := 80.0
+	if wp, ok := cfg["limit_warning_pct"].(float64); ok && wp > 0 {
+		warningPct = wp
+	}
+
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	log.Printf("Scheduler started (mode=%s interval=%v)", mode, interval)
+	log.Printf("Scheduler started (mode=%s interval=%v warning_threshold=%.0f%%)", mode, interval, warningPct)
 
 	for {
 		select {
@@ -32,12 +37,12 @@ func (s *Server) StartScheduler(ctx context.Context) {
 			log.Println("Scheduler stopped")
 			return
 		case <-ticker.C:
-			s.runScheduledTasks(ctx, cfg)
+			s.runScheduledTasks(ctx, cfg, warningPct)
 		}
 	}
 }
 
-func (s *Server) runScheduledTasks(ctx context.Context, cfg map[string]interface{}) {
+func (s *Server) runScheduledTasks(ctx context.Context, cfg map[string]interface{}, warningPct float64) {
 	if err := s.Ledger.ExecuteForwardDated(ctx); err != nil {
 		log.Printf("Scheduler forward-dated: %v", err)
 	}
@@ -46,6 +51,9 @@ func (s *Server) runScheduledTasks(ctx context.Context, cfg map[string]interface
 	}
 	if err := s.Ledger.EnforceRealtimeLiquidityBlocks(ctx); err != nil {
 		log.Printf("Scheduler enforce liquidity blocks: %v", err)
+	}
+	if err := s.Ledger.CheckWarningThresholds(ctx, warningPct); err != nil {
+		log.Printf("Scheduler warning thresholds: %v", err)
 	}
 	s.manageDNSCycles(ctx, cfg)
 }

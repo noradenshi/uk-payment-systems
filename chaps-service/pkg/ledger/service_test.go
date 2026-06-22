@@ -62,7 +62,7 @@ func TestConstants(t *testing.T) {
 func TestNewLedgerService(t *testing.T) {
 	// NewLedgerService requires a pool, but we verify it returns the expected type
 	// by checking it doesn't panic with nil pool
-	svc := NewLedgerService(nil)
+	svc := NewLedgerService(nil, nil)
 	if svc == nil {
 		t.Fatal("NewLedgerService returned nil")
 	}

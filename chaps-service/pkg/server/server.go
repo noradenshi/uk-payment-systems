@@ -605,19 +605,6 @@ func (s *Server) processXMLPayment(w http.ResponseWriter, r *http.Request) {
 
 	if res.Status == "ACTC" {
 		w.WriteHeader(http.StatusOK)
-		s.Events.Publish(msg.DestBIC, events.Event{
-			Type: "payment.received",
-			Data: map[string]interface{}{
-				"msg_id":           msg.MsgId,
-				"sender":           msg.Sender,
-				"receiver":         msg.DestBIC,
-				"receiver_sort_code": msg.DestSortCode,
-				"receiver_account": msg.DestAccount,
-				"amount":           msg.Amount,
-				"status":           "SETTLED",
-				"scheme":           "CHAPS",
-			},
-		})
 	} else {
 		w.WriteHeader(http.StatusAccepted)
 	}
@@ -701,22 +688,6 @@ func (s *Server) processJSONPayment(w http.ResponseWriter, r *http.Request) {
 	if res.Status == "RJCT" {
 		status = "REJECTED"
 		httpStatus = http.StatusAccepted
-	}
-
-	if res.Status == "ACTC" {
-		s.Events.Publish(req.ReceiverBIC, events.Event{
-			Type: "payment.received",
-			Data: map[string]interface{}{
-				"msg_id":           msgID,
-				"sender":           senderBic,
-				"receiver":         req.ReceiverBIC,
-				"receiver_sort_code": req.ReceiverSortCode,
-				"receiver_account": req.ReceiverAccount,
-				"amount":           req.Amount,
-				"status":           "SETTLED",
-				"scheme":           "CHAPS",
-			},
-		})
 	}
 
 	w.Header().Set("X-Transaction-Status", res.Status)

@@ -50,10 +50,11 @@ func main() {
 	registerXSD(reg, "head.001.001.04")
 	registerXSD(reg, "chaps_wrapper")
 
+	ev := events.NewEventBus()
 	srv := &server.Server{
 		Validator: reg,
-		Ledger:    ledger.NewLedgerService(pool),
-		Events:    events.NewEventBus(),
+		Ledger:    ledger.NewLedgerService(pool, ev),
+		Events:    ev,
 	}
 
 	schedCtx, schedCancel := context.WithCancel(context.Background())
